@@ -1,88 +1,85 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import React, { useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search } from 'lucide-react';
 
-// ==========================================
-// CONFIGURACIÓN DE FIREBASE
-// Reemplaza con tus variables de entorno para Next.js
-// ==========================================
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "dummy-api-key",
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "dummy.firebaseapp.com",
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "dummy-project-id",
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || "dummy.appspot.com",
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "123456789",
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:123:web:456"
-};
-
-// Inicialización de Firebase (evitar re-inicializar en hot reloads)
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-
-const APP_ID = "marketspider-v3"; // Identificador principal de la app para la estructura de DB
+const DUMMY_SCANS = [
+  {
+    id: 'scan-1',
+    date: new Date().toISOString(),
+    location: 'Centro de la Ciudad',
+    category: 'Restaurantes',
+    places: [
+      {
+        rank: 1,
+        name: 'Pizzería Luigi',
+        rating: 4.8,
+        reviews: 320,
+        visualScore: 85,
+        hasVideo: true,
+        lastPhoto: 'Hace 7 días',
+        opportunityType: 'Mantenimiento Visual'
+      },
+      {
+        rank: 2,
+        name: 'El Rincón del Asado',
+        rating: 4.5,
+        reviews: 210,
+        visualScore: 45,
+        hasVideo: false,
+        lastPhoto: 'Hace 2 meses',
+        opportunityType: 'Video + Refresh de Fotos'
+      },
+      {
+        rank: 3,
+        name: 'Sushi Go',
+        rating: 4.2,
+        reviews: 150,
+        visualScore: 30,
+        hasVideo: false,
+        lastPhoto: 'Hace 6 meses',
+        opportunityType: 'Video Promocional'
+      }
+    ]
+  },
+  {
+    id: 'scan-2',
+    date: new Date(Date.now() - 86400000 * 7).toISOString(), // Hace 1 semana
+    location: 'Centro de la Ciudad',
+    category: 'Restaurantes',
+    places: [
+      { rank: 2, name: 'Pizzería Luigi' },
+      { rank: 3, name: 'El Rincón del Asado' },
+      { rank: 4, name: 'Sushi Go' }
+    ]
+  },
+  {
+    id: 'scan-3',
+    date: new Date(Date.now() - 86400000 * 14).toISOString(), // Hace 2 semanas
+    location: 'Centro de la Ciudad',
+    category: 'Restaurantes',
+    places: [
+      { rank: 4, name: 'Pizzería Luigi' },
+      { rank: 5, name: 'El Rincón del Asado' },
+      { rank: 5, name: 'Sushi Go' }
+    ]
+  }
+];
 
 export default function MarketSpiderDashboard() {
-  const [user, setUser] = useState(null);
-  const [scans, setScans] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [scans, setScans] = useState(DUMMY_SCANS);
   const [activeTab, setActiveTab] = useState('opportunities');
-
-  // Autenticación anónima
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser) {
-        setUser(currentUser);
-      } else {
-        signInAnonymously(auth).catch((error) => {
-          console.error("Error signing in anonymously:", error);
-        });
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Sincronización en tiempo real con Firestore
-  useEffect(() => {
-    if (!user) return;
-    
-    // Colección exacta requerida: /artifacts/{APP_ID}/users/{userId}/scans
-    const path = `artifacts/${APP_ID}/users/${user.uid}/scans`;
-    const scansRef = collection(db, path);
-    const q = query(scansRef, orderBy("date", "desc"));
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const scansData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setScans(scansData);
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching real-time scans:", error);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [user]);
 
   // Funciones Derivadas
   const latestScan = scans[0];
   
   // Oportunidades: Locales con visualScore < 60
-  const opportunities = latestScan?.places.filter(place => place.visualScore < 60) || [];
+  const opportunities = latestScan?.places.filter(place => place.visualScore !== undefined && place.visualScore < 60) || [];
 
-  // Datos para el gráfico de Tracking (extrae los históricos para un lugar específico)
-  // Nota: Deberías mejorar esta lógica dinámicamente según lo requiera un caso real.
   const rankHistoryData = scans.map(scan => {
-    // Para simplificar tomamos un proxy del 'rank' promedio o del primer restaurante
     if(!scan.places || scan.places.length === 0) return null;
-    const samplePlace = scan.places[0];
+    const samplePlace = scan.places.find(p => p.name === 'Pizzería Luigi') || scan.places[0];
     return {
       date: new Date(scan.date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
       rank: samplePlace.rank,
@@ -90,20 +87,11 @@ export default function MarketSpiderDashboard() {
     };
   }).filter(Boolean).reverse();
 
-  // Función de copiar el Pitch (Ejemplo básico)
   const handleCopyPitch = (place) => {
     const pitch = `Hola equipo de ${place.name}, he notado que tienen potencial para mejorar su posición (actual #${place.rank}) en Google Maps. Su factor visual es bajo (${place.visualScore}/100) debido a la falta de ${place.hasVideo ? '' : 'video'} ${place.hasVideo && place.lastPhoto ? 'y' : 'o'} actualización de fotos. Me gustaría mostrarles cómo podemos implementar su ${place.opportunityType}.`;
     navigator.clipboard.writeText(pitch);
     alert(`Pitch copiado para ${place.name}!`);
   };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500"></div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans p-6 md:p-8 selection:bg-indigo-500/30">
@@ -158,7 +146,6 @@ export default function MarketSpiderDashboard() {
               ) : (
                 opportunities.map((place, idx) => (
                   <div key={idx} className="group bg-slate-900 border border-slate-800 rounded-2xl p-6 hover:border-indigo-500/50 hover:shadow-[0_0_30px_-5px_rgba(99,102,241,0.2)] transition-all duration-300 relative overflow-hidden flex flex-col justify-between">
-                    {/* Tarjeta top */}
                     <div>
                       <div className="flex justify-between items-start mb-4">
                         <div>
@@ -190,7 +177,6 @@ export default function MarketSpiderDashboard() {
                       </div>
                     </div>
 
-                    {/* Acciones */}
                     <div className="pt-4 border-t border-slate-800 flex justify-between items-center mt-auto">
                       <span className="bg-indigo-500/10 text-indigo-400 text-xs px-2 py-1 rounded border border-indigo-500/20">
                         {place.opportunityType}
@@ -213,7 +199,7 @@ export default function MarketSpiderDashboard() {
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
             <h2 className="text-2xl font-bold flex items-center gap-2 mb-6">
               <Activity className="text-cyan-400" />
-              Evolución de Ranking Histórico
+              Evolución de Ranking Histórico ('Pizzería Luigi')
             </h2>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 h-[400px]">
               {rankHistoryData.length < 2 ? (
@@ -225,7 +211,6 @@ export default function MarketSpiderDashboard() {
                   <LineChart data={rankHistoryData} margin={{ top: 5, right: 30, left: -20, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
                     <XAxis dataKey="date" stroke="#64748b" tick={{fill: '#64748b', fontSize: 12}} />
-                    {/* YAxis está invertido porque Rank #1 es mejor que Rank #20 */}
                     <YAxis reversed stroke="#64748b" tick={{fill: '#64748b', fontSize: 12}} domain={[1, 'dataMax + 2']} />
                     <Tooltip 
                       contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px' }}
