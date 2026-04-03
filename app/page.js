@@ -1,84 +1,66 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search } from 'lucide-react';
+import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle } from 'lucide-react';
+import { db, auth, signInAnonymously } from './firebase';
+import { collection, query, orderBy, onSnapshot } from "firebase/firestore";
 
-const DUMMY_SCANS = [
-  {
-    id: 'scan-1',
-    date: new Date().toISOString(),
-    location: 'Centro de la Ciudad',
-    category: 'Restaurantes',
-    places: [
-      {
-        rank: 1,
-        name: 'Pizzería Luigi',
-        rating: 4.8,
-        reviews: 320,
-        visualScore: 85,
-        hasVideo: true,
-        lastPhoto: 'Hace 7 días',
-        opportunityType: 'Mantenimiento Visual'
-      },
-      {
-        rank: 2,
-        name: 'El Rincón del Asado',
-        rating: 4.5,
-        reviews: 210,
-        visualScore: 45,
-        hasVideo: false,
-        lastPhoto: 'Hace 2 meses',
-        opportunityType: 'Video + Refresh de Fotos'
-      },
-      {
-        rank: 3,
-        name: 'Sushi Go',
-        rating: 4.2,
-        reviews: 150,
-        visualScore: 30,
-        hasVideo: false,
-        lastPhoto: 'Hace 6 meses',
-        opportunityType: 'Video Promocional'
-      }
-    ]
-  },
-  {
-    id: 'scan-2',
-    date: new Date(Date.now() - 86400000 * 7).toISOString(), // Hace 1 semana
-    location: 'Centro de la Ciudad',
-    category: 'Restaurantes',
-    places: [
-      { rank: 2, name: 'Pizzería Luigi' },
-      { rank: 3, name: 'El Rincón del Asado' },
-      { rank: 4, name: 'Sushi Go' }
-    ]
-  },
-  {
-    id: 'scan-3',
-    date: new Date(Date.now() - 86400000 * 14).toISOString(), // Hace 2 semanas
-    location: 'Centro de la Ciudad',
-    category: 'Restaurantes',
-    places: [
-      { rank: 4, name: 'Pizzería Luigi' },
-      { rank: 5, name: 'El Rincón del Asado' },
-      { rank: 5, name: 'Sushi Go' }
-    ]
-  }
-];
+const APP_ID = "marketspider-v3";
 
 export default function MarketSpiderDashboard() {
-  const [scans, setScans] = useState(DUMMY_SCANS);
+  const [scans, setScans] = useState([]);
   const [activeTab, setActiveTab] = useState('opportunities');
+  const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState(null);
+  const [error, setError] = useState(null);
+
+  // 1. Manejo de Autenticación Anónima
+  useEffect(() => {
+    signInAnonymously(auth)
+      .then((result) => {
+        setUserId(result.user.uid);
+        console.log("✅ Authenticated as:", result.user.uid);
+      })
+      .catch((err) => {
+        console.error("❌ Auth Error:", err);
+        setError("Error de autenticación: Verifica la configuración de Firebase.");
+        setLoading(false);
+      });
+  }, []);
+
+  // 2. Escuchar datos en tiempo real cuando tengamos USER_ID
+  useEffect(() => {
+    if (!userId) return;
+
+    const collectionPath = `artifacts/${APP_ID}/users/${userId}/scans`;
+    const q = query(collection(db, collectionPath), orderBy("date", "desc"));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setScans(data);
+      setLoading(false);
+    }, (err) => {
+      console.error("❌ Firestore Error:", err);
+      setError("Error al leer datos de Firestore. Verifica las reglas de seguridad.");
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [userId]);
 
   // Funciones Derivadas
   const latestScan = scans[0];
   
   // Oportunidades: Locales con visualScore < 60
-  const opportunities = latestScan?.places.filter(place => place.visualScore !== undefined && place.visualScore < 60) || [];
+  const opportunities = latestScan?.places?.filter(place => place.visualScore !== undefined && place.visualScore < 60) || [];
 
   const rankHistoryData = scans.map(scan => {
     if(!scan.places || scan.places.length === 0) return null;
+    // Buscamos un local representativo para el gráfico (ej. el primero de un nombre común o el #1 actual)
     const samplePlace = scan.places.find(p => p.name === 'Pizzería Luigi') || scan.places[0];
     return {
       date: new Date(scan.date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
@@ -93,6 +75,15 @@ export default function MarketSpiderDashboard() {
     alert(`Pitch copiado para ${place.name}!`);
   };
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 gap-4">
+        <Loader2 className="animate-spin text-indigo-500" size={48} />
+        <p className="animate-pulse">Conectando con MarketSpider Intelligence...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans p-6 md:p-8 selection:bg-indigo-500/30">
       <header className="max-w-7xl mx-auto mb-10 flex flex-col md:flex-row md:items-end justify-between border-b border-white/10 pb-6">
@@ -101,7 +92,10 @@ export default function MarketSpiderDashboard() {
             <Activity className="text-indigo-400" size={36} />
             MarketSpider V3
           </h1>
-          <p className="text-slate-400 text-sm md:text-base ml-1">Agency Suite | Local SEO & Visual Reconnaissance</p>
+          <p className="text-slate-400 text-sm md:text-base ml-1 flex items-center gap-2">
+            Agency Suite | Local SEO & Visual Reconnaissance
+            {userId && <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700">ID: {userId.slice(0, 8)}...</span>}
+          </p>
         </div>
         <div className="mt-4 md:mt-0 flex gap-4">
           <button 
@@ -125,6 +119,13 @@ export default function MarketSpiderDashboard() {
         </div>
       </header>
 
+      {error && (
+        <div className="max-w-7xl mx-auto mb-6 bg-rose-500/10 border border-rose-500/20 p-4 rounded-xl flex items-center gap-3 text-rose-400">
+          <AlertCircle size={20} />
+          <p>{error}</p>
+        </div>
+      )}
+
       <main className="max-w-7xl mx-auto">
         {activeTab === 'opportunities' && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -139,9 +140,19 @@ export default function MarketSpiderDashboard() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {opportunities.length === 0 ? (
+              {scans.length === 0 ? (
+                <div className="col-span-full py-12 text-center text-slate-500 bg-slate-900/50 rounded-2xl border border-dashed border-slate-800 backdrop-blur-sm flex flex-col items-center gap-4">
+                  <div className="p-4 bg-slate-800 rounded-full">
+                    <Search className="text-indigo-400/50" size={32} />
+                  </div>
+                  <div>
+                    <p className="text-lg font-medium text-slate-400">Aún no hay datos de escaneo.</p>
+                    <p className="text-sm">Ejecuta <code>python spider.py</code> después de configurar tu Firebase UID localmente.</p>
+                  </div>
+                </div>
+              ) : opportunities.length === 0 ? (
                 <div className="col-span-full py-12 text-center text-slate-500 bg-slate-900/50 rounded-2xl border border-slate-800 backdrop-blur-sm">
-                  No hay oportunidades detectadas. Inicia un escaneo con el Spider.
+                  Todos los locales del último escaneo tienen un Visual Score saludable.
                 </div>
               ) : (
                 opportunities.map((place, idx) => (
@@ -171,7 +182,7 @@ export default function MarketSpiderDashboard() {
                           <span className={place.hasVideo ? 'text-emerald-400' : 'text-rose-400'}>{place.hasVideo ? 'Sí' : 'No'}</span>
                         </div>
                         <div className="flex justify-between items-center text-sm">
-                          <span className="text-slate-400 flex items-center gap-2"><Camera size={14} /> Fotos / Última</span>
+                          <span className="text-slate-400 flex items-center gap-2"><Camera size={14} /> Última Foto</span>
                           <span className="text-slate-300">{place.lastPhoto}</span>
                         </div>
                       </div>
@@ -199,12 +210,13 @@ export default function MarketSpiderDashboard() {
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
             <h2 className="text-2xl font-bold flex items-center gap-2 mb-6">
               <Activity className="text-cyan-400" />
-              Evolución de Ranking Histórico ('Pizzería Luigi')
+              Evolución de Ranking Histórico
             </h2>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 h-[400px]">
               {rankHistoryData.length < 2 ? (
-                <div className="h-full flex items-center justify-center text-slate-500">
-                  Formato de data insuficiente. Realiza al menos 2 escaneos.
+                <div className="h-full flex flex-col items-center justify-center text-slate-500 gap-2">
+                  <Activity size={48} className="text-slate-800" />
+                  Formato de data insuficiente. Realiza al menos 2 escaneos con el Spider.
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -233,7 +245,7 @@ export default function MarketSpiderDashboard() {
             </h2>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
               {scans.length === 0 ? (
-                <div className="p-12 text-center text-slate-500">No hay escaneos todavía.</div>
+                <div className="p-12 text-center text-slate-500">No hay escaneos todavía. Inicia el Spider para recolectar datos.</div>
               ) : (
                 <div className="divide-y divide-slate-800/50">
                   {scans.map((scan) => (

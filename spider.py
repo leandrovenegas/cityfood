@@ -1,7 +1,7 @@
 import json
 import random
 import datetime
-from google.cloud import firestore
+from firebase_admin import firestore
 import firebase_admin
 from firebase_admin import credentials
 
@@ -14,7 +14,7 @@ SERVICE_ACCOUNT_FILE = 'serviceAccountKey.json'
 
 # IMPORTANTE: Como la web usa Autenticación Anónima, cada vez que entras se crea un User ID único (o se mantiene si la sesión persiste).
 # Debes revisar tu Firebase Authentication o la consola del navegador para copiar tu 'uid' y pegarlo aquí:
-USER_ID = "PEGAR_TU_UID_AQUI" 
+USER_ID = "Hp1YGeni2DgiWrtrIKUgmgki7UL2" 
 
 APP_ID = "marketspider-v3"
 CATEGORY = "Restaurantes"
