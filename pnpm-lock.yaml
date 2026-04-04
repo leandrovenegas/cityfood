@@ -8,6 +8,9 @@ dependencies:
   firebase:
     specifier: ^12.11.0
     version: 12.11.0
+  leaflet:
+    specifier: ^1.9.4
+    version: 1.9.4
   lucide-react:
     specifier: ^1.7.0
     version: 1.7.0(react@19.2.4)
@@ -20,6 +23,9 @@ dependencies:
   react-dom:
     specifier: 19.2.4
     version: 19.2.4(react@19.2.4)
+  react-leaflet:
+    specifier: ^5.0.0
+    version: 5.0.0(leaflet@1.9.4)(react-dom@19.2.4)(react@19.2.4)
   recharts:
     specifier: ^3.8.1
     version: 3.8.1(react-dom@19.2.4)(react-is@16.13.1)(react@19.2.4)(redux@5.0.1)
@@ -1224,6 +1230,18 @@ packages:
 
   /@protobufjs/utf8@1.1.0:
     resolution: {integrity: sha512-Vvn3zZrhQZkkBE8LSuW3em98c0FwgO4nxzv6OdSxPKJIEKY2bGbHn+mhGIPerzI4twdxaP8/0+06HBpwf345Lw==}
+    dev: false
+
+  /@react-leaflet/core@3.0.0(leaflet@1.9.4)(react-dom@19.2.4)(react@19.2.4):
+    resolution: {integrity: sha512-3EWmekh4Nz+pGcr+xjf0KNyYfC3U2JjnkWsh0zcqaexYqmmB5ZhH37kz41JXGmKzpaMZCnPofBBm64i+YrEvGQ==}
+    peerDependencies:
+      leaflet: ^1.9.0
+      react: ^19.0.0
+      react-dom: ^19.0.0
+    dependencies:
+      leaflet: 1.9.4
+      react: 19.2.4
+      react-dom: 19.2.4(react@19.2.4)
     dev: false
 
   /@reduxjs/toolkit@2.11.2(react-redux@9.2.0)(react@19.2.4):
@@ -3337,6 +3355,10 @@ packages:
       language-subtag-registry: 0.3.23
     dev: true
 
+  /leaflet@1.9.4:
+    resolution: {integrity: sha512-nxS1ynzJOmOlHp+iL3FyWqK89GtNL8U8rvlMOsQdTTssxZwCXh8N2NB3GDQOL+YR3XnWyZAxwQixURb+FA74PA==}
+    dev: false
+
   /levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
     engines: {node: '>= 0.8.0'}
@@ -3828,6 +3850,19 @@ packages:
 
   /react-is@16.13.1:
     resolution: {integrity: sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==}
+
+  /react-leaflet@5.0.0(leaflet@1.9.4)(react-dom@19.2.4)(react@19.2.4):
+    resolution: {integrity: sha512-CWbTpr5vcHw5bt9i4zSlPEVQdTVcML390TjeDG0cK59z1ylexpqC6M1PJFjV8jD7CF+ACBFsLIDs6DRMoLEofw==}
+    peerDependencies:
+      leaflet: ^1.9.0
+      react: ^19.0.0
+      react-dom: ^19.0.0
+    dependencies:
+      '@react-leaflet/core': 3.0.0(leaflet@1.9.4)(react-dom@19.2.4)(react@19.2.4)
+      leaflet: 1.9.4
+      react: 19.2.4
+      react-dom: 19.2.4(react@19.2.4)
+    dev: false
 
   /react-redux@9.2.0(react@19.2.4)(redux@5.0.1):
     resolution: {integrity: sha512-ROY9fvHhwOD9ySfrF0wmvu//bKCQ6AeZZq1nJNtbDC+kk5DuSuNX/n6YWYF/SYy7bSba4D4FSz8DJeKY/S/r+g==}
