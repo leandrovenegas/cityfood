@@ -2,9 +2,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import nextDynamic from 'next/dynamic';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle, Play, Clock, CheckCircle, XCircle, PlusCircle, RefreshCw, Trash2, Phone, Globe, Map, FileText, Target, DollarSign, CheckSquare, XSquare } from 'lucide-react';
+import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle, Play, Clock, CheckCircle, XCircle, PlusCircle, RefreshCw, Trash2, Phone, Globe, Map, FileText, Target, DollarSign, CheckSquare, XSquare, Sparkles } from 'lucide-react';
 import { db, auth, signInAnonymously } from './firebase';
-import { collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from "firebase/firestore";
+import { collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, setDoc } from "firebase/firestore";
 export const dynamic = 'force-dynamic';
 const MapComponent = nextDynamic(() => import('./components/MapComponent'), { ssr: false });
 
@@ -38,12 +38,17 @@ export default function MarketSpiderDashboard() {
   const [scans, setScans] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [crmLeads, setCrmLeads] = useState([]);
+  const [userConfig, setUserConfig] = useState({ 
+    categories: ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería / Barbería', 'Gimnasio', 'Bienes Raíces'], 
+    locations: ['Valparaíso', 'Viña del Mar', 'Santiago'] 
+  });
   const [activeTab, setActiveTab] = useState('opportunities');
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState(null);
   const [error, setError] = useState(null);
+  const [generatingProposalFor, setGeneratingProposalFor] = useState(null);
 
-  const [formConfig, setFormConfig] = useState({ rubro: 'Cafetería', ciudad: '', maxResults: 15, autoRepeatHours: 0 });
+  const [formConfig, setFormConfig] = useState({ rubro: '', ciudad: '', maxResults: 15, autoRepeatHours: 0 });
   const [submitting, setSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
 
@@ -228,6 +233,76 @@ export default function MarketSpiderDashboard() {
     await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { notes: newNotes, updatedAt: serverTimestamp() });
   };
 
+  const handleGenerateProposal = async (lead) => {
+    if (!userId) return;
+    setGeneratingProposalFor(lead.id);
+    try {
+      const res = await fetch('/api/agent/generate-proposal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: lead.website || '', name: lead.name, status: lead.status })
+      });
+      const data = await res.json();
+      
+      if (!res.ok) {
+        alert(data.error || "Error al conectar con la IA.");
+        return;
+      }
+      
+      await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, lead.id), {
+        ai_proposal_draft: data.proposal,
+        updatedAt: serverTimestamp()
+      });
+    } catch (err) {
+      console.error(err);
+      alert("Error crítico generando la propuesta.");
+    } finally {
+      setGeneratingProposalFor(null);
+    }
+  };
+
+  // 5. Fetch User Config (Categories & Locations)
+  useEffect(() => {
+    if (!userId) return;
+    const unsub = onSnapshot(doc(db, `artifacts/${APP_ID}/users/${userId}/config`, "preferences"), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setUserConfig({
+           categories: data.categories || ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería', 'Bienes Raíces'],
+           locations: data.locations || ['Valparaíso', 'Viña del Mar', 'Santiago']
+        });
+      } else {
+        setDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/config`, "preferences"), {
+           categories: ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería', 'Gimnasio', 'Bienes Raíces'],
+           locations: ['Valparaíso', 'Viña del Mar', 'Santiago']
+        }, { merge: true }).catch(console.error);
+      }
+    });
+    return () => unsub();
+  }, [userId]);
+
+  const handleAddCategory = async () => {
+    const newCat = prompt("Ingresa un nuevo Rubro (ej. 'Clínica Dental'):");
+    if(!newCat || !newCat.trim()) return;
+    const clean = newCat.trim();
+    if(userConfig.categories.includes(clean)) return;
+    const updated = [...userConfig.categories, clean];
+    setUserConfig({...userConfig, categories: updated});
+    await setDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/config`, "preferences"), { categories: updated }, { merge: true });
+    setFormConfig(p => ({...p, rubro: clean})); // autoselect
+  };
+
+  const handleAddLocation = async () => {
+    const newLoc = prompt("Ingresa una nueva Ciudad o Zona (ej. 'Cerro Alegre'):");
+    if(!newLoc || !newLoc.trim()) return;
+    const clean = newLoc.trim();
+    if(userConfig.locations.includes(clean)) return;
+    const updated = [...userConfig.locations, clean];
+    setUserConfig({...userConfig, locations: updated});
+    await setDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/config`, "preferences"), { locations: updated }, { merge: true });
+    setFormConfig(p => ({...p, ciudad: clean})); // autoselect
+  };
+
   const tabs = [
     { id: 'opportunities', label: 'Locales', color: 'indigo' },
     { id: 'crm', label: 'Seguimiento', color: 'amber' },
@@ -404,7 +479,7 @@ export default function MarketSpiderDashboard() {
                             onBlur={(e) => handleUpdateCRMNotes(lead.id, e.target.value)}
                           />
 
-                          <div className="pt-3 border-t border-slate-700/50">
+                          <div className="pt-3 border-t border-slate-700/50 flex flex-col gap-3">
                             <select 
                               className="bg-slate-900 border border-slate-700 text-slate-300 rounded-lg px-2 py-2 text-xs w-full focus:border-amber-500 outline-none"
                               value={lead.status}
@@ -412,6 +487,31 @@ export default function MarketSpiderDashboard() {
                             >
                               {CRM_STATUSES.map(s => <option key={s.id} value={s.id}>Mover a: {s.id}</option>)}
                             </select>
+
+                            {!lead.ai_proposal_draft ? (
+                              <button 
+                                onClick={() => handleGenerateProposal(lead)}
+                                disabled={generatingProposalFor === lead.id}
+                                className="w-full bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-lg px-3 py-2 text-xs font-bold transition-all flex items-center justify-center gap-2"
+                              >
+                                {generatingProposalFor === lead.id ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                                {generatingProposalFor === lead.id ? "Analizando Funnel..." : "Generar Propuesta IA"}
+                              </button>
+                            ) : (
+                               <div className="flex flex-col gap-2 mt-2">
+                                <span className="text-[10px] uppercase font-bold text-indigo-400 flex items-center gap-1"><Sparkles size={12}/> Propuesta Generada</span>
+                                <textarea
+                                  className="w-full bg-slate-950 border border-indigo-500/30 rounded-lg p-3 text-xs text-slate-300 min-h-[150px] resize-y focus:border-indigo-500 transition-colors"
+                                  defaultValue={`Hola Equipo de ${lead.name},\n\n${lead.ai_proposal_draft.gancho_inicial}\n\n${lead.ai_proposal_draft.analisis_competencia_maps}\n\n${lead.ai_proposal_draft.propuesta_audiovisual}\n\n${lead.ai_proposal_draft.cta_personalizado}`}
+                                />
+                                <button onClick={() => {
+                                   navigator.clipboard.writeText(`Hola Equipo de ${lead.name},\n\n${lead.ai_proposal_draft.gancho_inicial}\n\n${lead.ai_proposal_draft.analisis_competencia_maps}\n\n${lead.ai_proposal_draft.propuesta_audiovisual}\n\n${lead.ai_proposal_draft.cta_personalizado}`);
+                                   alert("¡Propuesta copiada!");
+                                }} className="w-full bg-slate-800 hover:bg-slate-700 text-white border border-slate-600 rounded-lg px-3 py-1.5 text-xs transition-colors flex items-center justify-center gap-2">
+                                  <Copy size={12}/> Copiar al Portapapeles
+                                </button>
+                               </div>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -524,12 +624,28 @@ export default function MarketSpiderDashboard() {
             <form onSubmit={handleSubmitJob} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
               <h2 className="text-xl font-bold flex items-center gap-2 mb-6 text-white"><PlusCircle className="text-violet-400" /> Nuevo Spider Job</h2>
               <div>
-                <label className="block text-sm text-slate-400 mb-2">Rubro</label>
-                <input required type="text" value={formConfig.rubro} onChange={e => setFormConfig(p => ({ ...p, rubro: e.target.value }))} className="w-full bg-slate-800 border-slate-700 rounded-lg p-3 text-white" />
+                <label className="block text-sm text-slate-400 mb-2">Rubro (Agrupación Estricta)</label>
+                <div className="flex gap-2">
+                  <select required value={formConfig.rubro} onChange={e => setFormConfig(p => ({ ...p, rubro: e.target.value }))} className="flex-1 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-violet-500 outline-none">
+                    <option value="">Selecciona o añade un rubro...</option>
+                    {userConfig.categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  </select>
+                  <button type="button" onClick={handleAddCategory} className="bg-slate-800 border border-slate-700 text-slate-300 hover:text-white px-4 rounded-lg flex items-center justify-center transition-colors shadow" title="Añadir Rubro Personalizado">
+                    <PlusCircle size={20} />
+                  </button>
+                </div>
               </div>
               <div>
-                <label className="block text-sm text-slate-400 mb-2">Ciudad / Zona</label>
-                <input required type="text" value={formConfig.ciudad} onChange={e => setFormConfig(p => ({ ...p, ciudad: e.target.value }))} className="w-full bg-slate-800 border-slate-700 rounded-lg p-3 text-white" />
+                <label className="block text-sm text-slate-400 mb-2">Ciudad / Zona Estricta</label>
+                <div className="flex gap-2">
+                  <select required value={formConfig.ciudad} onChange={e => setFormConfig(p => ({ ...p, ciudad: e.target.value }))} className="flex-1 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-violet-500 outline-none">
+                    <option value="">Selecciona o añade una ciudad/zona...</option>
+                    {userConfig.locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                  </select>
+                  <button type="button" onClick={handleAddLocation} className="bg-slate-800 border border-slate-700 text-slate-300 hover:text-white px-4 rounded-lg flex items-center justify-center transition-colors shadow" title="Añadir Ciudad Personalizada">
+                    <PlusCircle size={20} />
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="block text-sm text-slate-400 mb-2">Cantidad límite ({formConfig.maxResults})</label>

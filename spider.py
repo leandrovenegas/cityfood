@@ -73,17 +73,29 @@ def extract_place_data(page, url_href, rank):
     if match:
         lat, lng = float(match.group(1)), float(match.group(2))
 
-    # Rating y Reviews (Extracción simple desde el padre del h1)
+    # Rating y Reviews (Extracción robusta vía Accesibilidad / aria-label)
     rating, reviews = 0.0, 0
     try:
-        h1_parent = page.locator('h1').first.locator('..')
-        if h1_parent.count() > 0:
-            parent_text = h1_parent.inner_text()
-            rmatch = re.search(r'(\d+[\.,]\d+)[\s\n]*\(([\d\.]+)\)', parent_text)
-            if rmatch:
-                rating = float(rmatch.group(1).replace(',', '.'))
-                reviews = int(rmatch.group(2).replace('.', ''))
-    except:
+        # En Google Maps, el elemento que agrupa las valoraciones suele tener un aria-label estricto
+        # como: "4,5 estrellas 807 reseñas"
+        stars_element = page.locator('[aria-label*="estrellas"]').first
+        if stars_element.count() > 0:
+            aria_text = stars_element.get_attribute('aria-label') or ""
+            smatch = re.search(r'([\d,\.]+)\s*estrellas?.*?([\d\.]+)\s*reseñas?', aria_text, re.IGNORECASE)
+            if smatch:
+                rating = float(smatch.group(1).replace(',', '.'))
+                reviews = int(smatch.group(2).replace('.', ''))
+        
+        # Fallback: Si no lo encontró, buscamos bajo el H1 clásico
+        if rating == 0.0:
+            h1_parent = page.locator('h1').first.locator('..')
+            if h1_parent.count() > 0:
+                parent_text = h1_parent.inner_text()
+                rmatch = re.search(r'(\d+[\.,]\d+)[\s\n]*\(([\d\.]+)\)', parent_text)
+                if rmatch:
+                    rating = float(rmatch.group(1).replace(',', '.'))
+                    reviews = int(rmatch.group(2).replace('.', ''))
+    except Exception as e:
         pass
 
     # Teléfono y URL (sitio web) - Extraidos de vínculos interactivos
