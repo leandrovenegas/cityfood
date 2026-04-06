@@ -1,70 +1,63 @@
-'use client';
+"use client";
+import { useEffect, useState } from "react";
+import { getApps } from "firebase/app";
 
-import React, { useEffect, useState } from 'react';
-
-export default function FirebaseDiagnostics() {
-  const [status, setStatus] = useState({
-    apiKey: false,
-    projectId: false,
-    appId: false,
-  });
-
-  const [isMounted, setIsMounted] = useState(false);
+export default function FirebaseFullShield() {
+  const [envStatus, setEnvStatus] = useState({});
+  const [isClient, setIsClient] = useState(false);
 
   useEffect(() => {
-    setIsMounted(true);
+    setIsClient(true);
 
-    const diagnostics = {
-      API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ? '✅ Inyectada' : '❌ Undefined',
-      PROJECT_ID: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ? '✅ Inyectada' : '❌ Undefined',
-      APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID ? '✅ Inyectada' : '❌ Undefined',
-    };
+    // Lista de variables a verificar
+    const keys = [
+      "NEXT_PUBLIC_FIREBASE_API_KEY",
+      "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN",
+      "NEXT_PUBLIC_FIREBASE_PROJECT_ID",
+      "NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET",
+      "NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID",
+      "NEXT_PUBLIC_FIREBASE_APP_ID",
+      "NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID"
+    ];
 
-    setStatus({
-      apiKey: !!process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-      projectId: !!process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-      appId: !!process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+    const report = {};
+    keys.forEach(key => {
+      const value = process.env[key];
+      // Verificamos si existe y si no es un string vacío
+      report[key] = value && value.length > 0 ? "✅ OK" : "❌ FALTANTE";
     });
 
-    console.group('🚀 [Diagnóstico Antigravedad] - Firebase Env Vars');
-    console.table(diagnostics);
-    console.info(
-      "💡 TIPS DE LECTURA:\n" +
-      "1. ¿Todo dice '❌ Undefined'? -> Vercel no está inyectando las variables. Verifica el prefijo NEXT_PUBLIC_ y haz un Redeploy sin caché.\n" +
-      "2. ¿Todo está en '✅ Inyectada' pero Firebase da error? -> Puede que tu dominio (vercel.app) no esté autorizado en la consola de Firebase Authentication o Firestore Security Rules."
-    );
+    setEnvStatus(report);
+
+    // Log detallado en la consola (F12)
+    console.group("🚀 Diagnóstico de Variables Firebase");
+    console.table(report);
+    console.log("Apps Inicializadas:", getApps().length);
     console.groupEnd();
   }, []);
 
-  if (!isMounted) return null;
+  if (!isClient) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-[9999] p-4 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl text-xs text-white min-w-[200px]">
-      <h3 className="font-bold text-sm mb-3 border-b border-slate-700 pb-2 text-indigo-400">
-        🔍 Firebase Diagnostics
-      </h3>
-      <ul className="space-y-2 mb-3 font-mono">
-        <li className="flex justify-between items-center gap-4">
-          <span className="text-slate-400">API_KEY:</span> 
-          <span className={`px-2 py-1 rounded ${status.apiKey ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400 font-bold"}`}>
-            {status.apiKey ? "Detectada" : "Undefined"}
-          </span>
-        </li>
-        <li className="flex justify-between items-center gap-4">
-          <span className="text-slate-400">PROJECT_ID:</span> 
-          <span className={`px-2 py-1 rounded ${status.projectId ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400 font-bold"}`}>
-            {status.projectId ? "Detectada" : "Undefined"}
-          </span>
-        </li>
-        <li className="flex justify-between items-center gap-4">
-          <span className="text-slate-400">APP_ID:</span> 
-          <span className={`px-2 py-1 rounded ${status.appId ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400 font-bold"}`}>
-            {status.appId ? "Detectada" : "Undefined"}
-          </span>
-        </li>
-      </ul>
-      <div className="text-[11px] text-slate-500 border-t border-slate-700 mt-3 pt-2">
-        <p>Abre la consola (F12) para ver la tabla y la guía de diagnóstico completa.</p>
+    <div style={{
+      position: 'fixed', bottom: '20px', left: '20px', zIndex: 10000,
+      backgroundColor: '#000', color: '#fff', padding: '15px',
+      borderRadius: '10px', fontSize: '11px', border: '2px solid #333',
+      fontFamily: 'monospace', boxShadow: '0 0 20px rgba(0,255,0,0.2)',
+      maxWidth: '350px'
+    }}>
+      <b style={{ color: '#00ff00', fontSize: '12px' }}>🛰️ ESTADO DE VARIABLES (VERCEL)</b>
+      <hr style={{ borderColor: '#222', margin: '8px 0' }} />
+
+      {Object.entries(envStatus).map(([key, status]) => (
+        <div key={key} style={{ marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ color: '#aaa' }}>{key.replace('NEXT_PUBLIC_FIREBASE_', '')}:</span>
+          <span style={{ color: status.includes('✅') ? '#00ff00' : '#ff4444' }}>{status}</span>
+        </div>
+      ))}
+
+      <div style={{ marginTop: '10px', fontSize: '9px', color: '#888', fontStyle: 'italic' }}>
+        * Si ves ❌, agrégala en Vercel Settings y haz Redeploy (Cache OFF).
       </div>
     </div>
   );
