@@ -1,12 +1,12 @@
 'use client';
 import React, { useState, useEffect, useMemo } from 'react';
-import dynamic from 'next/dynamic';
+import nextDynamic from 'next/dynamic';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle, Play, Clock, CheckCircle, XCircle, PlusCircle, RefreshCw, Trash2, Phone, Globe, Map } from 'lucide-react';
 import { db, auth, signInAnonymously } from './firebase';
 import { collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from "firebase/firestore";
-
-const MapComponent = dynamic(() => import('./components/MapComponent'), { ssr: false });
+export const dynamic = 'force-dynamic';
+const MapComponent = nextDynamic(() => import('./components/MapComponent'), { ssr: false });
 
 const APP_ID = "marketspider-v3";
 
