@@ -1,5 +1,5 @@
 'use client';
-
+export const dynamic = 'force-dynamic';
 import React, { useState, useEffect, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -12,16 +12,16 @@ const MapComponent = dynamic(() => import('./components/MapComponent'), { ssr: f
 const APP_ID = "marketspider-v3";
 
 const JOB_STATUS_CONFIG = {
-  pending:   { label: "En cola",     className: "bg-amber-500/10 text-amber-400 border-amber-500/30",   icon: Clock },
-  running:   { label: "Corriendo",   className: "bg-blue-500/10 text-blue-400 border-blue-500/30",     icon: RefreshCw },
-  scheduled: { label: "Programado",  className: "bg-indigo-500/10 text-indigo-400 border-indigo-500/30", icon: Clock },
-  done:      { label: "Completado",  className: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30", icon: CheckCircle },
-  error:     { label: "Error",       className: "bg-rose-500/10 text-rose-400 border-rose-500/30",     icon: XCircle },
+  pending: { label: "En cola", className: "bg-amber-500/10 text-amber-400 border-amber-500/30", icon: Clock },
+  running: { label: "Corriendo", className: "bg-blue-500/10 text-blue-400 border-blue-500/30", icon: RefreshCw },
+  scheduled: { label: "Programado", className: "bg-indigo-500/10 text-indigo-400 border-indigo-500/30", icon: Clock },
+  done: { label: "Completado", className: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30", icon: CheckCircle },
+  error: { label: "Error", className: "bg-rose-500/10 text-rose-400 border-rose-500/30", icon: XCircle },
 };
 
 const REPEAT_OPTIONS = [
-  { value: 0,  label: "Sin repetición" },
-  { value: 6,  label: "Cada 6 horas" },
+  { value: 0, label: "Sin repetición" },
+  { value: 6, label: "Cada 6 horas" },
   { value: 12, label: "Cada 12 horas" },
   { value: 24, label: "Cada 24 horas (diario)" },
   { value: 48, label: "Cada 48 horas" },
@@ -38,7 +38,7 @@ export default function MarketSpiderDashboard() {
   const [formConfig, setFormConfig] = useState({ rubro: 'Cafetería', ciudad: '', maxResults: 15, autoRepeatHours: 0 });
   const [submitting, setSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
-  
+
   const [selectedBusiness, setSelectedBusiness] = useState(null);
 
   const [filterCategory, setFilterCategory] = useState('');
@@ -73,7 +73,7 @@ export default function MarketSpiderDashboard() {
   // Derivar Listado de Categorias y Ciudades
   const filterOptions = useMemo(() => {
     const list = new Set();
-    scans.forEach(s => { if(s.category && s.location) list.add(`${s.category}|${s.location}`); });
+    scans.forEach(s => { if (s.category && s.location) list.add(`${s.category}|${s.location}`); });
     return Array.from(list).map(str => {
       const [c, l] = str.split('|');
       return { category: c, location: l, key: str };
@@ -120,10 +120,10 @@ export default function MarketSpiderDashboard() {
       .map(([name, history]) => {
         const first = history[0];
         const last = history[history.length - 1];
-        const delta = first && last ? first.rank - last.rank : 0; 
+        const delta = first && last ? first.rank - last.rank : 0;
         return { name, history, firstRank: first?.rank, currentRank: last?.rank, delta, scans: history.length };
       })
-      .sort((a, b) => b.delta - a.delta); 
+      .sort((a, b) => b.delta - a.delta);
   }, [businessRankHistory]);
 
   const handleCopyPitch = (place) => {
@@ -133,7 +133,7 @@ export default function MarketSpiderDashboard() {
   };
 
   const handleDeletePlace = async (scanId, placeName) => {
-    if(!confirm(`¿Ignorar permanentemente a ${placeName} de este escaneo?`)) return;
+    if (!confirm(`¿Ignorar permanentemente a ${placeName} de este escaneo?`)) return;
     const scan = scans.find(s => s.id === scanId);
     if (!scan) return;
     const newPlaces = scan.places.filter(p => p.name !== placeName);
@@ -142,7 +142,7 @@ export default function MarketSpiderDashboard() {
 
   const handleDeleteScan = async (scanId, e) => {
     e.stopPropagation();
-    if(!confirm("¿Eliminar este escaneo entero? Se perderá permanentemente del tracking.")) return;
+    if (!confirm("¿Eliminar este escaneo entero? Se perderá permanentemente del tracking.")) return;
     await deleteDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/scans/`, scanId));
   };
 
@@ -163,16 +163,16 @@ export default function MarketSpiderDashboard() {
       });
       setSubmitSuccess(true);
       setTimeout(() => setSubmitSuccess(false), 3000);
-    } catch (err) { setError("Error al enviar trabajo."); } 
+    } catch (err) { setError("Error al enviar trabajo."); }
     finally { setSubmitting(false); }
   };
 
   const tabs = [
-    { id: 'opportunities', label: 'Locales',       color: 'indigo' },
-    { id: 'tracking',      label: 'Tracking',      color: 'cyan' },
-    { id: 'map',           label: 'Mapa',          color: 'emerald' },
-    { id: 'new-scan',      label: 'Rastreo',       color: 'violet' },
-    { id: 'history',       label: 'Historial',     color: 'slate' },
+    { id: 'opportunities', label: 'Locales', color: 'indigo' },
+    { id: 'tracking', label: 'Tracking', color: 'cyan' },
+    { id: 'map', label: 'Mapa', color: 'emerald' },
+    { id: 'new-scan', label: 'Rastreo', color: 'violet' },
+    { id: 'history', label: 'Historial', color: 'slate' },
   ];
 
   if (loading) return (
@@ -209,10 +209,10 @@ export default function MarketSpiderDashboard() {
       {(activeTab === 'opportunities' || activeTab === 'tracking' || activeTab === 'map') && (
         <div className="max-w-7xl mx-auto mb-6 bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row gap-4 items-center justify-between">
           <div className="flex items-center gap-3">
-             <MapPin size={20} className="text-indigo-400" />
-             <span className="font-semibold text-white">Filtro Activo de Rubro/Ciudad:</span>
+            <MapPin size={20} className="text-indigo-400" />
+            <span className="font-semibold text-white">Filtro Activo de Rubro/Ciudad:</span>
           </div>
-          <select 
+          <select
             className="bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-2 focus:border-indigo-500 min-w-[250px]"
             value={`${filterCategory}|${filterLocation}`}
             onChange={(e) => {
@@ -230,7 +230,7 @@ export default function MarketSpiderDashboard() {
       )}
 
       <main className="max-w-7xl mx-auto">
-      
+
         {/* ======================== TAB: OPORTUNIDADES ======================== */}
         {activeTab === 'opportunities' && (
           <div className="animate-in fade-in duration-500">
@@ -243,7 +243,7 @@ export default function MarketSpiderDashboard() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {opportunities.map((place, idx) => (
                 <div key={idx} className="group relative bg-slate-900 border border-slate-800 rounded-2xl p-6 hover:border-indigo-500/50 transition-all flex flex-col justify-between">
-                  
+
                   {/* Boton Borrar */}
                   <button onClick={() => handleDeletePlace(latestScan.id, place.name)}
                     className="absolute top-4 right-4 bg-slate-950/50 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 p-2 rounded-lg transition-colors border border-transparent hover:border-rose-500/30"
@@ -258,15 +258,15 @@ export default function MarketSpiderDashboard() {
                       <span className="flex items-center gap-1"><Star size={12} className="text-amber-400" /> {place.rating} ({place.reviews})</span>
                       <span className="flex items-center gap-1 font-bold text-indigo-400">Rank #{place.rank}</span>
                     </div>
-                    
+
                     <div className="space-y-3 mb-6 bg-slate-950 p-4 rounded-xl border border-white/5 text-sm">
                       <div className="flex items-center gap-3">
-                        <Phone size={14} className="text-slate-500 shrink-0"/>
-                        {place.phone ? <a href={`tel:${place.phone.replace(/\s/g,'')}`} className="text-indigo-400 hover:underline truncate">{place.phone}</a> : <span className="text-slate-600">No listado</span>}
+                        <Phone size={14} className="text-slate-500 shrink-0" />
+                        {place.phone ? <a href={`tel:${place.phone.replace(/\s/g, '')}`} className="text-indigo-400 hover:underline truncate">{place.phone}</a> : <span className="text-slate-600">No listado</span>}
                       </div>
                       <div className="flex items-center gap-3">
-                        <Globe size={14} className="text-slate-500 shrink-0"/>
-                        {place.website ? <a href={place.website} target="_blank" className="text-indigo-400 hover:underline truncate">{place.website.replace('https://','').replace('http://','')}</a> : <span className="text-slate-600">No listada</span>}
+                        <Globe size={14} className="text-slate-500 shrink-0" />
+                        {place.website ? <a href={place.website} target="_blank" className="text-indigo-400 hover:underline truncate">{place.website.replace('https://', '').replace('http://', '')}</a> : <span className="text-slate-600">No listada</span>}
                       </div>
                     </div>
                   </div>
@@ -295,9 +295,8 @@ export default function MarketSpiderDashboard() {
                   <div className="space-y-2 max-h-[600px] overflow-y-auto pr-1">
                     {businessList.map(({ name, currentRank, delta, scans: scanCount }) => (
                       <button key={name} onClick={() => setSelectedBusiness(name)}
-                        className={`w-full text-left rounded-xl p-3 border transition-all ${
-                          selectedBusiness === name ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-400' : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-600'
-                        }`}
+                        className={`w-full text-left rounded-xl p-3 border transition-all ${selectedBusiness === name ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-400' : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-600'
+                          }`}
                       >
                         <div className="flex items-center justify-between">
                           <p className="font-medium text-sm truncate">{name}</p>
@@ -323,7 +322,7 @@ export default function MarketSpiderDashboard() {
                     const last = history[history.length - 1];
                     const worstRank = Math.max(...history.map(h => h.rank)) + 2;
                     return (
-                       <div className="space-y-4">
+                      <div className="space-y-4">
                         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
                           <h3 className="text-2xl font-bold text-white mb-4">{selectedBusiness}</h3>
                           {history.length >= 2 ? (
@@ -353,7 +352,7 @@ export default function MarketSpiderDashboard() {
                             ))}
                           </div>
                         </div>
-                       </div>
+                      </div>
                     );
                   })()}
                 </div>
@@ -365,15 +364,15 @@ export default function MarketSpiderDashboard() {
         {/* ======================== TAB: MAPA ======================== */}
         {activeTab === 'map' && (
           <div className="animate-in fade-in duration-500">
-             <h2 className="text-2xl font-bold flex items-center gap-2 mb-6">
+            <h2 className="text-2xl font-bold flex items-center gap-2 mb-6">
               <Map className="text-emerald-400" /> Mapa de Oportunidades
             </h2>
             {latestScan ? (
-               <MapComponent places={latestScan.places || []} />
+              <MapComponent places={latestScan.places || []} />
             ) : (
-               <div className="p-12 text-center bg-slate-900 rounded-2xl border border-slate-800 text-slate-500">
-                 No hay datos geográficos para graficar.
-               </div>
+              <div className="p-12 text-center bg-slate-900 rounded-2xl border border-slate-800 text-slate-500">
+                No hay datos geográficos para graficar.
+              </div>
             )}
           </div>
         )}
@@ -388,12 +387,12 @@ export default function MarketSpiderDashboard() {
                 <input required type="text" value={formConfig.rubro} onChange={e => setFormConfig(p => ({ ...p, rubro: e.target.value }))} className="w-full bg-slate-800 border-slate-700 rounded-lg p-3 text-white" />
               </div>
               <div>
-                 <label className="block text-sm text-slate-400 mb-2">Ciudad / Zona</label>
-                 <input required type="text" value={formConfig.ciudad} onChange={e => setFormConfig(p => ({ ...p, ciudad: e.target.value }))} className="w-full bg-slate-800 border-slate-700 rounded-lg p-3 text-white" />
+                <label className="block text-sm text-slate-400 mb-2">Ciudad / Zona</label>
+                <input required type="text" value={formConfig.ciudad} onChange={e => setFormConfig(p => ({ ...p, ciudad: e.target.value }))} className="w-full bg-slate-800 border-slate-700 rounded-lg p-3 text-white" />
               </div>
               <div>
-                  <label className="block text-sm text-slate-400 mb-2">Cantidad límite ({formConfig.maxResults})</label>
-                  <input type="range" min={5} max={100} step={5} value={formConfig.maxResults} onChange={e => setFormConfig(p => ({ ...p, maxResults: parseInt(e.target.value) }))} className="w-full accent-violet-500" />
+                <label className="block text-sm text-slate-400 mb-2">Cantidad límite ({formConfig.maxResults})</label>
+                <input type="range" min={5} max={100} step={5} value={formConfig.maxResults} onChange={e => setFormConfig(p => ({ ...p, maxResults: parseInt(e.target.value) }))} className="w-full accent-violet-500" />
               </div>
               <button disabled={submitting} type="submit" className="w-full bg-violet-600 hover:bg-violet-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2">
                 {submitting ? <Loader2 className="animate-spin" /> : <Play />} Lanzar Spider
@@ -410,17 +409,17 @@ export default function MarketSpiderDashboard() {
                   return (
                     <div key={job.id} className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
                       <div className="flex justify-between items-start mb-2">
-                         <div className="flex items-center gap-2">
-                           <span className={`px-2 py-1 flex items-center gap-1 text-[10px] uppercase font-bold rounded border ${cfg.className}`}>
-                             <Icon size={12} className={job.status === 'running' ? 'animate-spin' : ''}/> {cfg.label}
-                           </span>
-                           <span className="font-bold text-white text-sm">{job.config?.rubro}</span>
-                         </div>
-                         {job.status === 'scheduled' && (
-                           <button onClick={() => handleForceScan(job.id)} className="flex items-center gap-1 text-xs bg-indigo-500/20 text-indigo-400 px-2 py-1 rounded hover:bg-indigo-500/30 transition-colors">
-                            <Play size={10} fill="currentColor"/> Forzar Ahora
-                           </button>
-                         )}
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-1 flex items-center gap-1 text-[10px] uppercase font-bold rounded border ${cfg.className}`}>
+                            <Icon size={12} className={job.status === 'running' ? 'animate-spin' : ''} /> {cfg.label}
+                          </span>
+                          <span className="font-bold text-white text-sm">{job.config?.rubro}</span>
+                        </div>
+                        {job.status === 'scheduled' && (
+                          <button onClick={() => handleForceScan(job.id)} className="flex items-center gap-1 text-xs bg-indigo-500/20 text-indigo-400 px-2 py-1 rounded hover:bg-indigo-500/30 transition-colors">
+                            <Play size={10} fill="currentColor" /> Forzar Ahora
+                          </button>
+                        )}
                       </div>
                       <p className="text-xs text-slate-400">{job.message}</p>
                     </div>
