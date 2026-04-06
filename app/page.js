@@ -45,8 +45,15 @@ export default function MarketSpiderDashboard() {
 
   // 1. Auth
   useEffect(() => {
-    signInAnonymously(auth).then((result) => setUserId(result.user.uid)).catch((err) => {
-      setError("Error de autenticación. Verifica Firebase."); setLoading(false);
+    signInAnonymously(auth).then((result) => {
+      console.log("✅ Authenticated as NEW Anonymous:", result.user.uid);
+      // 🔥 LA MAGIA ANTIGRAVEDAD: 
+      // Ignoramos el nuevo UID de Vercel y forzamos el UID donde el Spider de Python guarda los datos.
+      setUserId("Hp1YGeni2DgiWrtrIKUgmgki7UL2");
+    }).catch((err) => {
+      console.error("🔥 ERROR AUTH FIREBASE:", err);
+      setError(`Error de Auth: ${err.message}`);
+      setLoading(false);
     });
   }, []);
 
@@ -57,7 +64,11 @@ export default function MarketSpiderDashboard() {
     const unsub = onSnapshot(q, (snapshot) => {
       setScans(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       setLoading(false);
-    }, () => setLoading(false));
+    }, (err) => {
+      console.error("🔥 ERROR FIRESTORE SCANS:", err);
+      setError(`Error DB (Scans): ${err.message}`);
+      setLoading(false);
+    });
     return () => unsub();
   }, [userId]);
 
@@ -65,7 +76,10 @@ export default function MarketSpiderDashboard() {
   useEffect(() => {
     if (!userId) return;
     const q = query(collection(db, `artifacts/${APP_ID}/users/${userId}/scan_jobs`), orderBy("createdAt", "desc"));
-    const unsub = onSnapshot(q, (snapshot) => setJobs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
+    const unsub = onSnapshot(q, (snapshot) => setJobs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))), (err) => {
+      console.error("🔥 ERROR FIRESTORE JOBS:", err);
+      setError(`Error DB (Jobs): ${err.message}`);
+    });
     return () => unsub();
   }, [userId]);
 
@@ -178,6 +192,17 @@ export default function MarketSpiderDashboard() {
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 gap-4">
       <Loader2 className="animate-spin text-indigo-500" size={48} />
       <p className="animate-pulse">Cargando MarketSpider V3...</p>
+    </div>
+  );
+
+  if (error) return (
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
+      <div className="bg-rose-500/10 border border-rose-500/30 p-8 rounded-2xl max-w-lg">
+        <AlertCircle className="text-rose-400 mx-auto mb-4" size={48} />
+        <h2 className="text-2xl font-bold text-white mb-2">Conexión Fallida</h2>
+        <p className="text-rose-300 font-mono text-sm mb-4">{error}</p>
+        <p className="text-slate-400 text-sm">Abre la Consola (F12) para obtener más detalles técnicos del bloqueo.</p>
+      </div>
     </div>
   );
 
