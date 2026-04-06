@@ -1,4 +1,4 @@
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getAnalytics, isSupported } from "firebase/analytics";
@@ -13,16 +13,20 @@ const firebaseConfig = {
   measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+// 🛡️ PROTECCIÓN ANTIGRAVEDAD: Solo inicializa si tenemos la API Key
+// Esto evita que el build de Vercel truene si la variable no está inyectada aún
+const app = (getApps().length > 0)
+  ? getApp()
+  : (firebaseConfig.apiKey ? initializeApp(firebaseConfig) : null);
 
-let analytics = null;
-if (typeof window !== "undefined") {
+// Solo exportamos los servicios si 'app' existe
+export const auth = app ? getAuth(app) : null;
+export const db = app ? getFirestore(app) : null;
+export { signInAnonymously };
+
+export let analytics = null;
+if (typeof window !== "undefined" && app) {
   isSupported().then(supported => {
     if (supported) analytics = getAnalytics(app);
   });
 }
-
-export { auth, db, analytics, signInAnonymously };
