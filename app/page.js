@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import nextDynamic from 'next/dynamic';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle, Play, Clock, CheckCircle, XCircle, PlusCircle, RefreshCw, Trash2, Phone, Globe, Map } from 'lucide-react';
+import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle, Play, Clock, CheckCircle, XCircle, PlusCircle, RefreshCw, Trash2, Phone, Globe, Map, FileText, Target, DollarSign, CheckSquare, XSquare } from 'lucide-react';
 import { db, auth, signInAnonymously } from './firebase';
 import { collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from "firebase/firestore";
 export const dynamic = 'force-dynamic';
@@ -26,9 +26,18 @@ const REPEAT_OPTIONS = [
   { value: 48, label: "Cada 48 horas" },
 ];
 
+const CRM_STATUSES = [
+  { id: 'Prospecto', icon: Target, color: 'slate' },
+  { id: 'Primer Contacto', icon: FileText, color: 'indigo' },
+  { id: 'Negociación', icon: DollarSign, color: 'amber' },
+  { id: 'Ganado', icon: CheckSquare, color: 'emerald' },
+  { id: 'Perdido', icon: XSquare, color: 'rose' }
+];
+
 export default function MarketSpiderDashboard() {
   const [scans, setScans] = useState([]);
   const [jobs, setJobs] = useState([]);
+  const [crmLeads, setCrmLeads] = useState([]);
   const [activeTab, setActiveTab] = useState('opportunities');
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState(null);
@@ -180,8 +189,48 @@ export default function MarketSpiderDashboard() {
     finally { setSubmitting(false); }
   };
 
+  // 4. Fetch CRM Leads
+  useEffect(() => {
+    if (!userId) return;
+    const q = query(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`), orderBy("updatedAt", "desc"));
+    const unsub = onSnapshot(q, (snapshot) => setCrmLeads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))), (err) => {
+      console.error("🔥 ERROR FIRESTORE CRM:", err);
+    });
+    return () => unsub();
+  }, [userId]);
+
+  const handleAddCRM = async (place) => {
+    if(!userId) return;
+    const exists = crmLeads.find(lead => lead.name === place.name);
+    if(exists) { alert("Este prospecto ya está en tu CRM."); return; }
+    try {
+      await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`), {
+        name: place.name,
+        phone: place.phone || '',
+        website: place.website || '',
+        rank: place.rank || 0,
+        status: 'Prospecto',
+        notes: '',
+        updatedAt: serverTimestamp(),
+      });
+      alert(`¡${place.name} movido a Seguimiento!`);
+    } catch(err) {
+      console.error("Error to CRM", err);
+      alert("Error al agregar al CRM.");
+    }
+  };
+
+  const handleUpdateCRMStatus = async (leadId, newStatus) => {
+    await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { status: newStatus, updatedAt: serverTimestamp() });
+  };
+
+  const handleUpdateCRMNotes = async (leadId, newNotes) => {
+    await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { notes: newNotes, updatedAt: serverTimestamp() });
+  };
+
   const tabs = [
     { id: 'opportunities', label: 'Locales', color: 'indigo' },
+    { id: 'crm', label: 'Seguimiento', color: 'amber' },
     { id: 'tracking', label: 'Tracking', color: 'cyan' },
     { id: 'map', label: 'Mapa', color: 'emerald' },
     { id: 'new-scan', label: 'Rastreo', color: 'violet' },
@@ -296,12 +345,80 @@ export default function MarketSpiderDashboard() {
                   </div>
                   <div className="pt-4 border-t border-slate-800 flex justify-between items-center">
                     <span className="bg-indigo-500/10 text-indigo-400 text-xs px-2 py-1 rounded border border-indigo-500/20">{place.opportunityType || 'Oportunidad'}</span>
-                    <button onClick={() => handleCopyPitch(place)} className="flex items-center gap-2 text-sm bg-white/5 hover:bg-white/10 text-white px-3 py-2 rounded-lg transition-colors border border-white/10">
-                      <Copy size={16} /> Pitch
-                    </button>
+                    <div className="flex gap-2">
+                      <button onClick={() => handleAddCRM(place)} className="flex items-center gap-1 text-sm bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 px-3 py-2 rounded-lg transition-colors border border-amber-500/20">
+                        <PlusCircle size={16} /> CRM
+                      </button>
+                      <button onClick={() => handleCopyPitch(place)} className="flex items-center gap-2 text-sm bg-white/5 hover:bg-white/10 text-white px-3 py-2 rounded-lg transition-colors border border-white/10">
+                        <Copy size={16} /> Pitch
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* ======================== TAB: CRM ======================== */}
+        {activeTab === 'crm' && (
+          <div className="animate-in fade-in duration-500">
+             <h2 className="text-2xl font-bold flex items-center gap-2 mb-6">
+              <Target className="text-amber-400" /> CRM / Seguimiento
+              <span className="ml-auto bg-slate-800 text-slate-300 px-3 py-1 rounded-full text-xs border border-slate-700">
+                {crmLeads.length} Prospectos
+              </span>
+            </h2>
+            
+            <div className="flex gap-6 overflow-x-auto pb-8 snap-x">
+              {CRM_STATUSES.map(col => {
+                const colLeads = crmLeads.filter(l => l.status === col.id);
+                const ColIcon = col.icon;
+                return (
+                  <div key={col.id} className="min-w-[300px] w-[300px] flex-shrink-0 snap-start">
+                    <div className={`bg-${col.color}-500/10 border border-${col.color}-500/30 rounded-t-xl p-3 flex justify-between items-center`}>
+                      <h3 className={`font-bold text-${col.color}-400 flex items-center gap-2`}><ColIcon size={16}/> {col.id}</h3>
+                      <span className="bg-slate-900 px-2 py-0.5 rounded text-xs text-slate-300">{colLeads.length}</span>
+                    </div>
+                    <div className="bg-slate-900 border border-slate-800 border-t-0 rounded-b-xl min-h-[500px] p-3 space-y-3">
+                      {colLeads.map(lead => (
+                        <div key={lead.id} className="bg-slate-800 border border-slate-700 rounded-lg p-4 shadow-lg flex flex-col gap-3">
+                          <div>
+                            <div className="flex justify-between items-start mb-1">
+                              <h4 className="font-bold text-white text-sm leading-tight pr-4">{lead.name}</h4>
+                            </div>
+                            <div className="flex items-center text-[10px] text-slate-400 gap-2 mb-2">
+                              <span>Rank #{lead.rank}</span>
+                            </div>
+                          </div>
+                          
+                          <div className="flex flex-col gap-2 text-xs text-slate-300 mb-2">
+                            {lead.phone && <a href={`tel:${lead.phone.replace(/\s/g,'')}`} className="flex items-center gap-2 hover:text-indigo-400"><Phone size={12}/> {lead.phone}</a>}
+                            {lead.website && <a href={lead.website} target="_blank" className="flex items-center gap-2 hover:text-indigo-400"><Globe size={12}/> Sitio Web</a>}
+                          </div>
+
+                          <textarea 
+                            className="bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs text-slate-300 w-full h-20 resize-none focus:border-indigo-500 transition-colors"
+                            placeholder="Notas de la llamada o correos..."
+                            defaultValue={lead.notes}
+                            onBlur={(e) => handleUpdateCRMNotes(lead.id, e.target.value)}
+                          />
+
+                          <div className="pt-3 border-t border-slate-700/50">
+                            <select 
+                              className="bg-slate-900 border border-slate-700 text-slate-300 rounded-lg px-2 py-2 text-xs w-full focus:border-amber-500 outline-none"
+                              value={lead.status}
+                              onChange={(e) => handleUpdateCRMStatus(lead.id, e.target.value)}
+                            >
+                              {CRM_STATUSES.map(s => <option key={s.id} value={s.id}>Mover a: {s.id}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
