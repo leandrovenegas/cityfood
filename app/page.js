@@ -39,7 +39,7 @@ export default function MarketSpiderDashboard() {
   const [jobs, setJobs] = useState([]);
   const [crmLeads, setCrmLeads] = useState([]);
   const [userConfig, setUserConfig] = useState({ 
-    categories: ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería / Barbería', 'Gimnasio', 'Bienes Raíces'], 
+    categories: ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería / Barbería', 'Gimnasio', 'Bienes Raíces', 'Hostal Residencial', 'Hotel'], 
     locations: ['Valparaíso', 'Viña del Mar', 'Santiago'] 
   });
   const [activeTab, setActiveTab] = useState('opportunities');
@@ -99,12 +99,18 @@ export default function MarketSpiderDashboard() {
 
   // Derivar Listado de Categorias y Ciudades
   const filterOptions = useMemo(() => {
-    const list = new Set();
-    scans.forEach(s => { if (s.category && s.location) list.add(`${s.category}|${s.location}`); });
-    return Array.from(list).map(str => {
-      const [c, l] = str.split('|');
-      return { category: c, location: l, key: str };
+    const map = new Map();
+    scans.forEach(s => { 
+      if (s.category && s.location) {
+        const c = s.category.trim();
+        const l = s.location.trim();
+        const normalizedKey = `${c.toLowerCase()}|${l.toLowerCase()}`;
+        if (!map.has(normalizedKey)) {
+          map.set(normalizedKey, { category: c, location: l, key: `${c}|${l}` });
+        }
+      } 
     });
+    return Array.from(map.values());
   }, [scans]);
 
   useEffect(() => {
@@ -112,11 +118,18 @@ export default function MarketSpiderDashboard() {
       setFilterCategory(filterOptions[0].category);
       setFilterLocation(filterOptions[0].location);
     }
-  }, [filterOptions]);
+  }, [filterOptions, filterCategory, filterLocation]);
 
   // Scans filtrados globalmente (para Tracking y Mapa y Oportunidades)
   const filteredScans = useMemo(() => {
-    return scans.filter(s => s.category === filterCategory && s.location === filterLocation);
+    if (!filterCategory || !filterLocation) return [];
+    const fc = filterCategory.trim().toLowerCase();
+    const fl = filterLocation.trim().toLowerCase();
+    return scans.filter(s => 
+      s.category && s.location && 
+      s.category.trim().toLowerCase() === fc && 
+      s.location.trim().toLowerCase() === fl
+    );
   }, [scans, filterCategory, filterLocation]);
 
   const latestScan = filteredScans[0];
@@ -130,6 +143,7 @@ export default function MarketSpiderDashboard() {
       scan.places?.forEach(place => {
         if (!map[place.name]) map[place.name] = [];
         map[place.name].push({
+          scanId: scan.id,
           date: new Date(scan.date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }),
           rank: place.rank,
           visualScore: place.visualScore ?? null,
@@ -179,15 +193,21 @@ export default function MarketSpiderDashboard() {
 
   const handleSubmitJob = async (e) => {
     e.preventDefault();
-    if (!userId || !formConfig.ciudad.trim()) return;
+    if (!userId || !formConfig.ciudad.trim() || !formConfig.rubro.trim()) return;
     setSubmitting(true); setSubmitSuccess(false);
+
+    // Generar un ID único determinista: evitar "Doble Tracking"
+    const rubroLimpio = formConfig.rubro.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    const ciudadLimpia = formConfig.ciudad.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    const jobId = `job_${rubroLimpio}_${ciudadLimpia}`;
+
     try {
-      await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/scan_jobs`), {
+      await setDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/scan_jobs`, jobId), {
         status: "pending",
         config: formConfig,
-        message: "Enviado al Playwright Spider...",
-        createdAt: serverTimestamp(),
-      });
+        message: "Enviado a cola del Playwright Spider...",
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
       setSubmitSuccess(true);
       setTimeout(() => setSubmitSuccess(false), 3000);
     } catch (err) { setError("Error al enviar trabajo."); }
@@ -233,6 +253,11 @@ export default function MarketSpiderDashboard() {
     await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { notes: newNotes, updatedAt: serverTimestamp() });
   };
 
+  const handleDeleteCRMLead = async (leadId) => {
+    if (!confirm("¿Eliminar este prospecto del CRM permanentemente?")) return;
+    await deleteDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId));
+  };
+
   const handleGenerateProposal = async (lead) => {
     if (!userId) return;
     setGeneratingProposalFor(lead.id);
@@ -266,14 +291,16 @@ export default function MarketSpiderDashboard() {
     if (!userId) return;
     const unsub = onSnapshot(doc(db, `artifacts/${APP_ID}/users/${userId}/config`, "preferences"), (docSnap) => {
       if (docSnap.exists()) {
+        const defaults = ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería / Barbería', 'Gimnasio', 'Bienes Raíces', 'Hostal Residencial', 'Hotel'];
         const data = docSnap.data();
         setUserConfig({
-           categories: data.categories || ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería', 'Bienes Raíces'],
+           categories: data.categories ? Array.from(new Set([...defaults, ...data.categories])) : defaults,
            locations: data.locations || ['Valparaíso', 'Viña del Mar', 'Santiago']
         });
       } else {
+        const defaults = ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería / Barbería', 'Gimnasio', 'Bienes Raíces', 'Hostal Residencial', 'Hotel'];
         setDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/config`, "preferences"), {
-           categories: ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería', 'Gimnasio', 'Bienes Raíces'],
+           categories: defaults,
            locations: ['Valparaíso', 'Viña del Mar', 'Santiago']
         }, { merge: true }).catch(console.error);
       }
@@ -461,6 +488,7 @@ export default function MarketSpiderDashboard() {
                           <div>
                             <div className="flex justify-between items-start mb-1">
                               <h4 className="font-bold text-white text-sm leading-tight pr-4">{lead.name}</h4>
+                              <button onClick={() => handleDeleteCRMLead(lead.id)} className="text-slate-600 hover:text-rose-400 transition-colors" title="Borrar Prospecto"><Trash2 size={14}/></button>
                             </div>
                             <div className="flex items-center text-[10px] text-slate-400 gap-2 mb-2">
                               <span>Rank #{lead.rank}</span>
@@ -586,9 +614,18 @@ export default function MarketSpiderDashboard() {
                           <h4 className="text-sm text-slate-400 font-medium mb-4">Registro Cronológico</h4>
                           <div className="space-y-3">
                             {[...history].reverse().map((snap, idx) => (
-                              <div key={idx} className="flex items-center gap-4 py-2 border-b border-slate-800/50 last:border-0 text-sm">
-                                <span className="text-slate-400 w-32">{snap.date}</span>
-                                <span className="font-bold text-white flex-1">Raking #{snap.rank}</span>
+                              <div key={idx} className="flex items-center justify-between py-2 border-b border-slate-800/50 last:border-0 text-sm group">
+                                <div className="flex items-center gap-4">
+                                  <span className="text-slate-400 w-32">{snap.date}</span>
+                                  <span className="font-bold text-white flex-1">Ranking #{snap.rank}</span>
+                                </div>
+                                <button
+                                  onClick={() => handleDeletePlace(snap.scanId, selectedBusiness)}
+                                  className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
+                                  title="Quitar este punto del historial (Snapshot con error)"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
                               </div>
                             ))}
                           </div>

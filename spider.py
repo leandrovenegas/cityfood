@@ -4,6 +4,7 @@ import time
 import threading
 import signal
 import sys
+import queue
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -197,75 +198,83 @@ def run_spider_engine(config: dict) -> dict:
     }
 
 # ==========================================
-# PROCESADOR DE TRABAJOS
+# PROCESADOR DE TRABAJOS (WORKER Y COLA)
 # ==========================================
-def process_job(db, job_ref, job_data, active_timers):
-    config = job_data.get("config", {})
-    auto_repeat_hours = int(config.get("autoRepeatHours", 0))
-    job_id = job_ref.id
+job_queue = queue.Queue()
 
-    try:
-        # 1. Marcar como corriendo
-        job_ref.update({
-            "status": "running",
-            "lastRunAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "message": "Spider ejecutando rastreo..."
-        })
+def worker_loop(db):
+    """
+    Toma trabajos de la cola uno por uno. Limita a Playwright a una sola 
+    instancia corriendo a la vez. Implementa pausas anti-ban.
+    """
+    print("👷 Worker iniciado y esperando trabajos en la cola...")
+    while running:
+        try:
+            # timeout=1 permite chequear el flag 'running' y salir suavemente
+            job_ref, job_data, job_id = job_queue.get(timeout=1)
+        except queue.Empty:
+            continue
 
-        # 2. Ejecutar el motor del spider
-        scan_data = run_spider_engine(config)
+        if not running:
+            break
 
-        # 3. Subir resultados a la colección de scans del usuario
-        scans_path = f"artifacts/{APP_ID}/users/{USER_ID}/scans"
-        db.collection(scans_path).document().set(scan_data)
-        print(f"  ✅ {len(scan_data['places'])} locales guardados en Firestore.")
-
-        # 4. Calcular próxima ejecución o marcar como done
-        if auto_repeat_hours > 0:
-            next_run = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=auto_repeat_hours)
+        config = job_data.get("config", {})
+        try:
+            # 1. Marcar como corriendo
             job_ref.update({
-                "status": "scheduled",
-                "nextRunAt": next_run.isoformat(),
-                "message": f"Esperando... próxima ejecución a las {next_run.strftime('%H:%M')} UTC"
+                "status": "running",
+                "lastRunAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "message": "Spider ejecutando rastreo..."
             })
-            print(f"  ⏰ Auto-rastreo programado en {auto_repeat_hours}h (a las {next_run.strftime('%H:%M')} UTC)")
 
-            # Programar re-ejecución en un hilo daemon
-            def delayed_rerun():
-                time.sleep(auto_repeat_hours * 3600)
-                if running:
-                    print(f"\n⏰ Ejecutando rastreo automático programado: {config.get('rubro', '?')} en {config.get('ciudad', '?')}")
-                    job_ref.update({"status": "pending", "message": "Re-ejecución automática iniciada"})
+            # 2. Ejecutar el motor del spider
+            scan_data = run_spider_engine(config)
 
-            timer_thread = threading.Thread(target=delayed_rerun, daemon=True)
-            timer_thread.start()
-            active_timers[job_id] = timer_thread
+            # 3. Subir resultados a la colección de scans
+            scans_path = f"artifacts/{APP_ID}/users/{USER_ID}/scans"
+            db.collection(scans_path).document().set(scan_data)
+            print(f"  ✅ {len(scan_data['places'])} locales guardados en Firestore.")
 
-        else:
+            # 4. Marcar como finalizado (Ya no reprogramamos timers acá, de eso se encarga NightCron)
             job_ref.update({
                 "status": "done",
                 "message": f"Rastreo completado: {len(scan_data['places'])} locales encontrados."
             })
-            print(f"  🏁 Trabajo finalizado.\n")
+            print(f"  🏁 Trabajo '{job_id}' finalizado.")
 
-    except Exception as e:
-        print(f"  ❌ Error al procesar el trabajo '{job_id[:8]}': {e}")
-        try:
-            job_ref.update({"status": "error", "message": str(e)})
-        except:
-            pass
+        except Exception as e:
+            print(f"  ❌ Error al procesar el trabajo '{job_id[:8]}': {e}")
+            try:
+                job_ref.update({"status": "error", "message": str(e)})
+            except:
+                pass
+        
+        job_queue.task_done()
+
+        # 5. Delay Anti-Ban antes de procesar el siguiente trabajo de la cola
+        if not job_queue.empty():
+            delay = random.randint(60, 180) # 1 a 3 minutos
+            print(f"  ⏱️  Pausa Anti-Ban activada. Siguiente trabajo en {delay} segundos...\n")
+            for _ in range(delay):
+                if not running: break
+                time.sleep(1)
+        else:
+            print("  ☕ Cola vacía, retornando a reposo.\n")
 
 # ==========================================
 # LISTENER PRINCIPAL
 # ==========================================
 def start_listening(db):
     jobs_path = f"artifacts/{APP_ID}/users/{USER_ID}/scan_jobs"
-    print(f"👂 Escuchando trabajos en: .../{USER_ID[:8]}.../scan_jobs")
+    print(f"👂 Escuchando trabajos... (Los rastreos manuales aplican en tiempo real)")
     print(f"   Presiona Ctrl+C para detener el spider.\n")
     print("-" * 50)
 
+    # Iniciar el Worker (Hilo Secuencial)
+    w_t = threading.Thread(target=worker_loop, args=(db,), daemon=True)
+    w_t.start()
+
     processed_jobs = set()
-    active_timers = {}
 
     def on_snapshot(col_snapshot, changes, read_time):
         for change in changes:
@@ -278,23 +287,82 @@ def start_listening(db):
                 if status == "pending" and job_id not in processed_jobs:
                     processed_jobs.add(job_id)
                     config = job_data.get("config", {})
-                    print(f"\n📋 ¡Nuevo trabajo! ID: {job_id[:8]}  |  {config.get('rubro','?')} en {config.get('ciudad','?')}")
+                    print(f"\n📋 [ENCOLADO] Trabajo detectado: {config.get('rubro','?')} en {config.get('ciudad','?')}")
+                    
+                    # Lo mandamos a la cola para procesamiento FIFO por el worker
+                    job_queue.put((job_ref, job_data, job_id))
 
-                    # Procesar en hilo separado para no bloquear el listener
-                    t = threading.Thread(
-                        target=process_job,
-                        args=(db, job_ref, job_data, active_timers),
-                        daemon=True
-                    )
-                    t.start()
-
-                elif status == "pending" and job_id in processed_jobs:
-                    # Re-desencolar si fue re-puesto a pending (auto-repeat)
+                elif status != "pending" and job_id in processed_jobs:
+                    # Liberar del set local si el trabajo cambió de status y finalizó/fayó
                     processed_jobs.discard(job_id)
 
     col_ref = db.collection(jobs_path)
     col_watch = col_ref.on_snapshot(on_snapshot)
     return col_watch
+
+# ==========================================
+# VERIFICADOR DE TAREAS (CRON NOCTURNO)
+# ==========================================
+def verify_stale_tasks(db):
+    """
+    Verifica las tareas cada hora, pero SOLO re-encola si 
+    nos encontramos en la ventana nocturna (1 AM - 6 AM local).
+    """
+    local_hour = datetime.datetime.now().hour
+    
+    if 1 <= local_hour < 6:
+        print(f"\n🌙 [NightCron] Hora {local_hour}:00, evaluando tareas > 24hs...")
+    else:
+        # En horas diurnas mantenemos silencio para no llenar los logs, o podemos 
+        # printear un estado sutil ocasional.
+        return
+        
+    jobs_path = f"artifacts/{APP_ID}/users/{USER_ID}/scan_jobs"
+    
+    try:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        one_day_ago = now - datetime.timedelta(days=1, hours=20) # Añadimos cierto buffer al de un día para ser elásticos
+        
+        docs = db.collection(jobs_path).stream()
+        requeued_count = 0
+        
+        for doc in docs:
+            data = doc.to_dict()
+            status = data.get("status")
+            last_run_str = data.get("lastRunAt")
+            
+            # Reprogramamos si pasaron más de ~24hs
+            if status in ["done", "scheduled", "error"] and last_run_str:
+                try:
+                    if last_run_str.endswith("Z"):
+                        last_run_str = last_run_str[:-1] + "+00:00"
+                    last_run = datetime.datetime.fromisoformat(last_run_str)
+                    
+                    if last_run < one_day_ago:
+                        print(f"  🔄 [NightCron] Reprogramando tarea: {doc.id}")
+                        doc.reference.update({
+                            "status": "pending",
+                            "message": "Re-ejecución automática nocturna iniciada."
+                        })
+                        requeued_count += 1
+                except Exception as e:
+                    print(f"  ⚠️ Error parseando fecha en tarea {doc.id}: {e}")
+                    
+        if requeued_count > 0:
+            print(f"✅ [NightCron] {requeued_count} tareas enviadas a la Cola Secuencial.")
+            
+    except Exception as e:
+        print(f"❌ [NightCron] Error: {e}")
+
+def stale_tasks_loop(db):
+    """Ejecuta el verificador en bucle cada hora."""
+    while running:
+        verify_stale_tasks(db)
+        # Esperar 60 minutos (3600 segundos) para la siguiente evaluación
+        for _ in range(3600):
+            if not running:
+                break
+            time.sleep(1)
 
 # ==========================================
 # MAIN — BUCLE PRINCIPAL
@@ -325,6 +393,11 @@ if __name__ == "__main__":
 
     col_watch = start_listening(db)
 
+    # Iniciar el verificador de tareas en un hilo secundario
+    verifier_thread = threading.Thread(target=stale_tasks_loop, args=(db,), daemon=True)
+    verifier_thread.start()
+
     # Mantener el proceso vivo
     while running:
         time.sleep(1)
+
