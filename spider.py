@@ -50,7 +50,38 @@ def determine_opportunity(score: int, has_video: bool, last_photo_days_ago: int)
 # ==========================================
 from playwright.sync_api import sync_playwright
 import urllib.parse
+import urllib.request
 import re
+
+def audit_website(url: str) -> dict:
+    aud = {"score": 0, "secure": False, "responsive": False, "has_seo": False, "good_content_length": False, "online": False}
+    if not url: return aud
+    
+    aud["secure"] = url.startswith("https://")
+    if aud["secure"]: aud["score"] += 20
+        
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+        with urllib.request.urlopen(req, timeout=4) as response:
+            if response.getcode() == 200:
+                aud["online"] = True
+                aud["score"] += 30
+                try:
+                    html_content = response.read(60000).decode('utf-8', errors='ignore') # limit to first 60kb to be fast
+                    if '<meta name="viewport"' in html_content:
+                        aud["responsive"] = True
+                        aud["score"] += 20
+                    if 'property="og:' in html_content or 'name="twitter:' in html_content:
+                        aud["has_seo"] = True
+                        aud["score"] += 15
+                    if len(html_content) > 2000:
+                        aud["good_content_length"] = True
+                        aud["score"] += 15
+                except:
+                    pass
+    except:
+        pass
+    return aud
 
 def extract_place_data(page, url_href, rank):
     """Navega al detalle interactivo de Google Maps y extrae datos reales."""
@@ -120,6 +151,9 @@ def extract_place_data(page, url_href, rank):
     opp_type = determine_opportunity(score, has_video, last_photo_days_ago)
     last_photo_str = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=last_photo_days_ago)).strftime("%Y-%m-%d")
 
+    # Nueva Auditoría algorítmica de Página Web
+    web_audit = audit_website(website)
+
     return {
         "rank": rank,
         "name": name,
@@ -132,7 +166,9 @@ def extract_place_data(page, url_href, rank):
         "visualScore": score,
         "hasVideo": has_video,
         "lastPhoto": last_photo_str,
-        "opportunityType": opp_type
+        "opportunityType": opp_type,
+        "webScore": web_audit["score"],
+        "webAudit": web_audit
     }
 
 def run_spider_engine(config: dict) -> dict:
@@ -184,7 +220,8 @@ def run_spider_engine(config: dict) -> dict:
                 pdata = extract_place_data(page, href, rank)
                 if pdata:
                     places.append(pdata)
-                    print(f"    [{rank:02d}] {pdata['name']:<25} | Rank: {pdata['rank']} | Phone: {pdata['phone']}")
+                    current_time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    print(f"    [{rank:02d}] {pdata['name']:<25} | Rank: {pdata['rank']} | Phone: {pdata['phone']} : {current_time_str}")
 
             browser.close()
     except Exception as e:

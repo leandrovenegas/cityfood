@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useEffect, useMemo } from 'react';
+import Link from 'next/link';
 import nextDynamic from 'next/dynamic';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle, Play, Clock, CheckCircle, XCircle, PlusCircle, RefreshCw, Trash2, Phone, Globe, Map as MapIcon, FileText, Target, DollarSign, CheckSquare, XSquare, Sparkles } from 'lucide-react';
@@ -365,7 +366,10 @@ export default function MarketSpiderDashboard() {
             <Activity className="text-indigo-400" size={36} />
             MarketSpider V3
           </h1>
-          <p className="text-slate-400 text-sm flex items-center gap-2">Google Maps Directory & Ranking suite</p>
+          <div className="flex flex-wrap items-center gap-4 mt-1">
+            <p className="text-slate-400 text-sm flex items-center gap-2">Google Maps Directory & Ranking suite</p>
+            <Link href="/directorio" className="text-xs bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 font-bold px-3 py-1.5 rounded-full border border-emerald-500/30 transition-colors shadow-sm shadow-emerald-500/10 flex items-center gap-2">🗃️ Ver Directorio Consolidado</Link>
+          </div>
         </div>
         <nav className="mt-4 md:mt-0 flex flex-wrap gap-2">
           {tabs.map(tab => (
