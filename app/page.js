@@ -369,6 +369,7 @@ export default function MarketSpiderDashboard() {
           <div className="flex flex-wrap items-center gap-4 mt-1">
             <p className="text-slate-400 text-sm flex items-center gap-2">Google Maps Directory & Ranking suite</p>
             <Link href="/directorio" className="text-xs bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 font-bold px-3 py-1.5 rounded-full border border-emerald-500/30 transition-colors shadow-sm shadow-emerald-500/10 flex items-center gap-2">🗃️ Ver Directorio Consolidado</Link>
+            <Link href="/global" className="text-xs bg-fuchsia-500/10 hover:bg-fuchsia-500/20 text-fuchsia-400 font-bold px-3 py-1.5 rounded-full border border-fuchsia-500/30 transition-colors shadow-sm shadow-fuchsia-500/10 flex items-center gap-2">🌐 Rastreador GLOBAL 24/7</Link>
           </div>
         </div>
         <nav className="mt-4 md:mt-0 flex flex-wrap gap-2">

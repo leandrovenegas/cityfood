@@ -54,7 +54,7 @@ import urllib.request
 import re
 
 def audit_website(url: str) -> dict:
-    aud = {"score": 0, "secure": False, "responsive": False, "has_seo": False, "good_content_length": False, "online": False}
+    aud = {"score": 0, "secure": False, "responsive": False, "has_seo": False, "good_content_length": False, "online": False, "video_count": 0}
     if not url: return aud
     
     aud["secure"] = url.startswith("https://")
@@ -77,6 +77,14 @@ def audit_website(url: str) -> dict:
                     if len(html_content) > 2000:
                         aud["good_content_length"] = True
                         aud["score"] += 15
+                        
+                    # Extraer videos y iframes audiovisuales
+                    videoTags = html_content.count('<video')
+                    embedFrames = len(re.findall(r'<iframe[^>]*src="[^"]*(youtube\.com|youtu\.be|vimeo\.com)', html_content, re.IGNORECASE))
+                    aud["video_count"] = videoTags + embedFrames
+                    
+                    if aud["video_count"] > 0:
+                        aud["score"] = min(100, aud["score"] + 10)
                 except:
                     pass
     except:

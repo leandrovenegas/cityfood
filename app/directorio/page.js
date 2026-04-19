@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
-import { collection, query, orderBy, onSnapshot } from "firebase/firestore";
+import { collection, query, orderBy, onSnapshot, updateDoc, doc, getDoc } from "firebase/firestore";
 import { db, auth, signInAnonymously } from '../firebase';
 import { ArrowLeft, Search, Loader2, Star, Phone, Globe, MapPin, X, ExternalLink, Play, Calendar, Activity, Filter, Server, ShieldCheck, Smartphone } from 'lucide-react';
 
@@ -14,6 +14,100 @@ export default function DirectoryExcelView() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [selectedPlace, setSelectedPlace] = useState(null);
+  const [auditing, setAuditing] = useState(false);
+  const [batchAuditStatus, setBatchAuditStatus] = useState({ active: false, current: 0, total: 0 });
+
+  const handleBatchAudit = async () => {
+    const targets = filteredPlaces.filter(p => p.website && p.scanId);
+    if(targets.length === 0) {
+        alert("Ningún local en esta lista tiene sitio web para auditar.");
+        return;
+    }
+    if(!confirm(`¿Auditar masivamente la parte técnica de ${targets.length} sitios web secuencialmente? Esto puede tomar un tiempo.`)) return;
+
+    setBatchAuditStatus({ active: true, current: 0, total: targets.length });
+    
+    let processed = 0;
+    for (const target of targets) {
+        try {
+            const res = await fetch('/api/audit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json'},
+                body: JSON.stringify({ url: target.website })
+            });
+            if(res.ok) {
+                const data = await res.json();
+                const newAudit = data.audit;
+
+                // Actualizar Firestore obteniendo el doc fresco para evitar sobreescritura de estado stale
+                const scanRef = doc(db, `artifacts/${APP_ID}/users/${USER_ID}/scans/`, target.scanId);
+                const scanSnap = await getDoc(scanRef);
+                if(scanSnap.exists()) {
+                    const scanData = scanSnap.data();
+                    const newPlaces = scanData.places.map(p => {
+                        if (p.name === target.name) {
+                            return { ...p, webAudit: newAudit, webScore: newAudit.score };
+                        }
+                        return p;
+                    });
+                    await updateDoc(scanRef, { places: newPlaces });
+                }
+            }
+        } catch(err) {
+            console.error(err);
+        }
+        processed++;
+        setBatchAuditStatus({ active: true, current: processed, total: targets.length });
+        
+        // Timer de 1 segundo para no estresar Firebase ni Cloud Functions/Nextjs API
+        await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    setBatchAuditStatus({ active: false, current: 0, total: 0 });
+    alert("Auditoría Masiva Completada.");
+  };
+
+  const handleManualAudit = async () => {
+    if (!selectedPlace || !selectedPlace.website || !selectedPlace.scanId) {
+        alert("Este local no tiene sitio web o no posee Scan ID.");
+        return;
+    }
+    setAuditing(true);
+    try {
+      const res = await fetch('/api/audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json'},
+        body: JSON.stringify({ url: selectedPlace.website })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert("Error al auditar la web: " + (data.error || "Desconocido"));
+        setAuditing(false);
+        return;
+      }
+      
+      const newAudit = data.audit;
+      
+      // Update Firestore
+      const scanRef = doc(db, `artifacts/${APP_ID}/users/${USER_ID}/scans/`, selectedPlace.scanId);
+      const scanObj = scans.find(s => s.id === selectedPlace.scanId);
+      if(scanObj) {
+         const newPlaces = scanObj.places.map(p => {
+             if (p.name === selectedPlace.name) {
+                 return { ...p, webAudit: newAudit, webScore: newAudit.score };
+             }
+             return p;
+         });
+         await updateDoc(scanRef, { places: newPlaces });
+         setSelectedPlace({...selectedPlace, webAudit: newAudit, webScore: newAudit.score});
+      }
+    } catch(err) {
+      console.error(err);
+      alert("Error crítico conectando a la API de auditoría.");
+    } finally {
+      setAuditing(false);
+    }
+  };
 
   // Auth and Data Fetching
   useEffect(() => {
@@ -91,7 +185,23 @@ export default function DirectoryExcelView() {
           <p className="text-slate-400 text-sm">Vista estilo hoja de cálculo de todas las empresas extraídas.</p>
         </div>
         
-        <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto">
+        <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto items-center">
+          
+          {batchAuditStatus.active ? (
+            <div className="flex items-center gap-2 bg-indigo-500/20 text-indigo-400 font-bold px-4 py-2.5 rounded-xl text-sm border border-indigo-500/30 whitespace-nowrap">
+               <Loader2 size={16} className="animate-spin" />
+               <span>Auditando {batchAuditStatus.current} de {batchAuditStatus.total}</span>
+            </div>
+          ) : (
+            <button 
+              onClick={handleBatchAudit}
+              className="bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 font-bold px-4 py-2.5 rounded-xl text-sm border border-indigo-500/30 transition-colors flex items-center gap-2 shadow-sm whitespace-nowrap"
+              title="Auditar Web secuencialmente de todos los locales listados en tabla"
+            >
+               <Server size={16} /> Auditar Todos
+            </button>
+          )}
+
           <div className="relative">
             <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
             <select 
@@ -156,6 +266,9 @@ export default function DirectoryExcelView() {
                     <td className="px-6 py-3 border-r border-slate-800 flex items-center justify-center gap-3">
                         {place.phone ? <Phone size={14} className="text-emerald-400" title={place.phone}/> : <Phone size={14} className="text-slate-700" />}
                         {place.website ? <Globe size={14} className="text-indigo-400" title="Tiene Sitio Web"/> : <Globe size={14} className="text-slate-700" />}
+                        <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name + " " + (place.location || ''))}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-blue-400 hover:text-blue-300 transition-colors" title="Ver en Google My Business">
+                            <MapPin size={14} />
+                        </a>
                     </td>
                     <td className="px-6 py-3 border-r border-slate-800">
                         <div className="flex items-center gap-1.5">
@@ -261,8 +374,20 @@ export default function DirectoryExcelView() {
                </div>
 
                {/* Auditoria WEB */}
-               <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-5">
-                  <h4 className="text-indigo-400 font-bold text-sm mb-3 flex items-center gap-2"><Server size={16}/> Auditoría Técnica de Web</h4>
+               <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-5 relative overflow-hidden">
+                  <div className="flex justify-between items-start mb-3 border-b border-indigo-500/20 pb-2">
+                     <h4 className="text-indigo-400 font-bold text-sm flex items-center gap-2"><Server size={16}/> Auditoría Técnica de Web</h4>
+                     {selectedPlace.website ? (
+                       <button 
+                         onClick={handleManualAudit} 
+                         disabled={auditing}
+                         className="flex items-center gap-1.5 bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 text-[10px] uppercase font-bold px-2 py-1 rounded transition-colors disabled:opacity-50"
+                       >
+                         {auditing ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+                         {auditing ? 'Auditando...' : selectedPlace.webAudit ? 'Re-Auditar' : 'Forzar Auditoría'}
+                       </button>
+                     ) : null}
+                  </div>
                   {selectedPlace.webAudit ? (
                     <>
                       <div className="flex items-center justify-between mb-4">
@@ -280,6 +405,12 @@ export default function DirectoryExcelView() {
                             <span className="flex items-center gap-2"><Smartphone size={14} className={selectedPlace.webAudit.responsive ? 'text-emerald-400' : 'text-slate-500'}/> Optimizado Móvil</span>
                             <strong className={selectedPlace.webAudit.responsive ? 'text-emerald-400' : 'text-rose-400'}>{selectedPlace.webAudit.responsive ? 'Sí' : 'No'}</strong>
                          </li>
+                         {selectedPlace.webAudit.video_count !== undefined && (
+                             <li className="flex justify-between items-center text-slate-300">
+                                <span className="flex items-center gap-2"><Play size={14} className={selectedPlace.webAudit.video_count > 0 ? 'text-emerald-400' : 'text-slate-500'}/> Audiovisual en Sitio Web</span>
+                                <strong className={selectedPlace.webAudit.video_count > 0 ? 'text-emerald-400' : 'text-rose-400'}>{selectedPlace.webAudit.video_count > 0 ? `${selectedPlace.webAudit.video_count} video(s)` : 'Sin videos detectados'}</strong>
+                             </li>
+                         )}
                       </ul>
                     </>
                   ) : <p className="text-xs text-slate-400 italic">No hay información de auditoría para este escaneo. Realiza un nuevo rastreo en MarketSpider.</p>}
