@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import nextDynamic from 'next/dynamic';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle, Play, Clock, CheckCircle, XCircle, PlusCircle, RefreshCw, Trash2, Phone, Globe, Map, FileText, Target, DollarSign, CheckSquare, XSquare, Sparkles } from 'lucide-react';
+import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle, Play, Clock, CheckCircle, XCircle, PlusCircle, RefreshCw, Trash2, Phone, Globe, Map as MapIcon, FileText, Target, DollarSign, CheckSquare, XSquare, Sparkles } from 'lucide-react';
 import { db, auth, signInAnonymously } from './firebase';
 import { collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, setDoc } from "firebase/firestore";
 export const dynamic = 'force-dynamic';
@@ -643,7 +643,7 @@ export default function MarketSpiderDashboard() {
         {activeTab === 'map' && (
           <div className="animate-in fade-in duration-500">
             <h2 className="text-2xl font-bold flex items-center gap-2 mb-6">
-              <Map className="text-emerald-400" /> Mapa de Oportunidades
+              <MapIcon className="text-emerald-400" /> Mapa de Oportunidades
             </h2>
             {latestScan ? (
               <MapComponent places={latestScan.places || []} />
