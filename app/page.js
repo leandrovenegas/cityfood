@@ -35,6 +35,17 @@ const CRM_STATUSES = [
   { id: 'Perdido', icon: XSquare, color: 'rose' }
 ];
 
+const OPPORTUNITY_GAPS = [
+  { id: 'no_reclamada',   emoji: '🔓', label: 'Ficha no reclamada',    color: 'bg-rose-500/20 text-rose-300 border-rose-500/40' },
+  { id: 'sin_web',        emoji: '🌐', label: 'Sin sitio web',        color: 'bg-orange-500/20 text-orange-300 border-orange-500/40' },
+  { id: 'sin_video',      emoji: '🎥', label: 'Sin video',            color: 'bg-violet-500/20 text-violet-300 border-violet-500/40' },
+  { id: 'sin_menu',       emoji: '🍽️', label: 'Sin carta/menú',      color: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' },
+  { id: 'sin_respuesta',  emoji: '💬', label: 'No responde reviews',  color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+  { id: 'fotos_viejas',   emoji: '📷', label: 'Fotos desactualizadas', color: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
+  { id: 'solo_social',    emoji: '📱', label: 'Solo redes sociales',  color: 'bg-pink-500/20 text-pink-300 border-pink-500/40' },
+  { id: 'rating_bajo',    emoji: '⭐', label: 'Rating bajo',          color: 'bg-amber-600/20 text-amber-200 border-amber-600/40' },
+];
+
 export default function MarketSpiderDashboard() {
   const [scans, setScans] = useState([]);
   const [jobs, setJobs] = useState([]);
@@ -55,6 +66,7 @@ export default function MarketSpiderDashboard() {
   const [submitSuccess, setSubmitSuccess] = useState(false);
 
   const [selectedBusiness, setSelectedBusiness] = useState(null);
+  const [scanningGapFor, setScanningGapFor] = useState(null);
 
   const [filterCategory, setFilterCategory] = useState('');
   const [filterLocation, setFilterLocation] = useState('');
@@ -272,6 +284,41 @@ export default function MarketSpiderDashboard() {
 
   const handleUpdateCRMNotes = async (leadId, newNotes) => {
     await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { notes: newNotes, updatedAt: serverTimestamp() });
+  };
+
+  const handleUpdateCRMField = async (leadId, field, value) => {
+    await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { [field]: value, updatedAt: serverTimestamp() });
+  };
+
+  const handleToggleGap = async (leadId, gapId, currentGaps) => {
+    const gaps = currentGaps || [];
+    const newGaps = gaps.includes(gapId) ? gaps.filter(g => g !== gapId) : [...gaps, gapId];
+    await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { gaps: newGaps, updatedAt: serverTimestamp() });
+  };
+
+  const handleScanGaps = async (lead) => {
+    setScanningGapFor(lead.id);
+    try {
+      const res = await fetch('/api/scan-gaps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ website: lead.website, rating: lead.rank, phone: lead.phone }),
+      });
+      const data = await res.json();
+      if (res.ok && data.detected_gaps) {
+        // Merge: conservar los gaps manuales que el auto no puede detectar
+        const manualOnly = ['no_reclamada', 'sin_menu', 'sin_respuesta', 'fotos_viejas'];
+        const currentManual = (lead.gaps || []).filter(g => manualOnly.includes(g));
+        const merged = [...new Set([...currentManual, ...data.detected_gaps])];
+        await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, lead.id), {
+          gaps: merged, updatedAt: serverTimestamp()
+        });
+      }
+    } catch (err) {
+      console.error('Error escaneando gaps:', err);
+    } finally {
+      setScanningGapFor(null);
+    }
   };
 
   const handleDeleteCRMLead = async (leadId) => {
@@ -591,6 +638,98 @@ export default function MarketSpiderDashboard() {
                           <div className="flex flex-col gap-2 text-xs text-slate-300 mb-2">
                             {lead.phone && <a href={`tel:${lead.phone.replace(/\s/g,'')}`} className="flex items-center gap-2 hover:text-indigo-400"><Phone size={12}/> {lead.phone}</a>}
                             {lead.website && <a href={lead.website} target="_blank" className="flex items-center gap-2 hover:text-indigo-400"><Globe size={12}/> Sitio Web</a>}
+                          </div>
+
+                          {/* --- GAPS DE OPORTUNIDAD --- */}
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span> Brechas Detectadas
+                              </p>
+                              <button
+                                onClick={() => handleScanGaps(lead)}
+                                disabled={scanningGapFor === lead.id}
+                                className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-md border bg-slate-900 border-slate-700 text-slate-400 hover:border-indigo-500/50 hover:text-indigo-400 transition-all disabled:opacity-50"
+                                title="Auto-detectar brechas desde datos y web del local"
+                              >
+                                {scanningGapFor === lead.id
+                                  ? <><Loader2 size={10} className="animate-spin" /> Escaneando...</>
+                                  : <><RefreshCw size={10} /> Re-escanear</>
+                                }
+                              </button>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {OPPORTUNITY_GAPS.map(gap => {
+                                const active = (lead.gaps || []).includes(gap.id);
+                                return (
+                                  <button
+                                    key={gap.id}
+                                    onClick={() => handleToggleGap(lead.id, gap.id, lead.gaps)}
+                                    title={gap.label}
+                                    className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full border transition-all ${
+                                      active
+                                        ? gap.color + ' shadow-sm'
+                                        : 'bg-slate-900 text-slate-600 border-slate-700 hover:border-slate-500 hover:text-slate-400'
+                                    }`}
+                                  >
+                                    <span>{gap.emoji}</span>
+                                    {active && <span className="max-w-[80px] truncate">{gap.label}</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {(lead.gaps || []).length === 0 && (
+                              <p className="text-[10px] text-slate-600 italic">Toca los iconos para marcar las brechas del local.</p>
+                            )}
+                          </div>
+
+                          {/* --- DATOS DEL CAMPO (manuales) --- */}
+                          <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3 space-y-2">
+                            <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-2 flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Datos del Campo
+                            </p>
+                            <div className="grid grid-cols-1 gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-pink-400 shrink-0 text-sm">@</span>
+                                <input
+                                  type="text"
+                                  placeholder="Instagram (@handle)"
+                                  defaultValue={lead.instagram || ''}
+                                  onBlur={(e) => handleUpdateCRMField(lead.id, 'instagram', e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 placeholder-slate-600 focus:border-pink-500/50 focus:outline-none transition-colors"
+                                />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-sky-400 shrink-0 text-xs">✉</span>
+                                <input
+                                  type="email"
+                                  placeholder="Email de contacto"
+                                  defaultValue={lead.email || ''}
+                                  onBlur={(e) => handleUpdateCRMField(lead.id, 'email', e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 placeholder-slate-600 focus:border-sky-500/50 focus:outline-none transition-colors"
+                                />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-400 shrink-0 text-xs">👤</span>
+                                <input
+                                  type="text"
+                                  placeholder="Nombre del encargado"
+                                  defaultValue={lead.contact_name || ''}
+                                  onBlur={(e) => handleUpdateCRMField(lead.id, 'contact_name', e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 placeholder-slate-600 focus:border-slate-500/50 focus:outline-none transition-colors"
+                                />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-violet-400 shrink-0 text-xs">🔵</span>
+                                <input
+                                  type="text"
+                                  placeholder="Facebook / otra red"
+                                  defaultValue={lead.facebook || ''}
+                                  onBlur={(e) => handleUpdateCRMField(lead.id, 'facebook', e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 placeholder-slate-600 focus:border-violet-500/50 focus:outline-none transition-colors"
+                                />
+                              </div>
+                            </div>
                           </div>
 
                           <textarea 
