@@ -44,6 +44,7 @@ export default function MarketSpiderDashboard() {
     locations: ['Valparaíso', 'Viña del Mar', 'Santiago'] 
   });
   const [activeTab, setActiveTab] = useState('opportunities');
+  const [triageFilter, setTriageFilter] = useState('sin_revisar');
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState(null);
   const [error, setError] = useState(null);
@@ -175,11 +176,30 @@ export default function MarketSpiderDashboard() {
   };
 
   const handleDeletePlace = async (scanId, placeName) => {
-    if (!confirm(`¿Ignorar permanentemente a ${placeName} de este escaneo?`)) return;
+    if (!confirm(`¿Eliminar permanentemente a ${placeName} de la base de datos?`)) return;
     const scan = scans.find(s => s.id === scanId);
     if (!scan) return;
     const newPlaces = scan.places.filter(p => p.name !== placeName);
     await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/scans/`, scanId), { places: newPlaces });
+  };
+
+  const handleSetStatus = async (place, newStatus) => {
+    if (!userId || !latestScan) return;
+    const scanRef = doc(db, `artifacts/${APP_ID}/users/${userId}/scans/`, latestScan.id);
+    const newPlaces = latestScan.places.map(p =>
+      p.name === place.name ? { ...p, reviewStatus: newStatus } : p
+    );
+    await updateDoc(scanRef, { places: newPlaces });
+    // Si lo manda al CRM, también lo agrega como lead
+    if (newStatus === 'crm') {
+      const exists = crmLeads.find(lead => lead.name === place.name);
+      if (!exists) {
+        await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`), {
+          name: place.name, phone: place.phone || '', website: place.website || '',
+          rank: place.rank || 0, status: 'Prospecto', notes: '', updatedAt: serverTimestamp(),
+        });
+      }
+    }
   };
 
   const handleDeleteScan = async (scanId, e) => {
@@ -412,34 +432,79 @@ export default function MarketSpiderDashboard() {
       <main className="max-w-7xl mx-auto">
 
         {/* ======================== TAB: OPORTUNIDADES ======================== */}
-        {activeTab === 'opportunities' && (
-          <div className="animate-in fade-in duration-500">
-            <h2 className="text-2xl font-bold flex items-center gap-2 mb-6">
-              <Star className="text-amber-400" /> Locales Competidores
-              <span className="ml-auto bg-slate-800 text-slate-300 px-3 py-1 rounded-full text-xs border border-slate-700">
-                {opportunities.length} encontrados en último scan
-              </span>
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {opportunities.map((place, idx) => (
-                <div key={idx} className="group relative bg-slate-900 border border-slate-800 rounded-2xl p-6 hover:border-indigo-500/50 transition-all flex flex-col justify-between">
+        {activeTab === 'opportunities' && (() => {
+          const STATUS_CONFIG = {
+            sin_revisar: { label: 'Sin Revisar', dot: 'bg-slate-500', card: 'border-slate-700', badge: 'bg-slate-700/50 text-slate-300 border-slate-600' },
+            evaluando:   { label: 'En Evaluación', dot: 'bg-amber-400', card: 'border-amber-500/40', badge: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
+            crm:         { label: 'En CRM', dot: 'bg-emerald-400', card: 'border-emerald-500/40', badge: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
+            poco_valor:  { label: 'Poco Valor', dot: 'bg-rose-400', card: 'border-rose-500/30', badge: 'bg-rose-500/10 text-rose-400 border-rose-500/30' },
+            cerrado:     { label: 'Cerrado', dot: 'bg-slate-700', card: 'border-slate-800', badge: 'bg-slate-900 text-slate-500 border-slate-700' },
+          };
+          const counts = {};
+          Object.keys(STATUS_CONFIG).forEach(k => counts[k] = 0);
+          opportunities.forEach(p => { const s = p.reviewStatus || 'sin_revisar'; counts[s] = (counts[s] || 0) + 1; });
+          const visiblePlaces = triageFilter === 'todos'
+            ? opportunities
+            : opportunities.filter(p => (p.reviewStatus || 'sin_revisar') === triageFilter);
 
-                  {/* Boton Borrar */}
-                  <button onClick={() => handleDeletePlace(latestScan.id, place.name)}
-                    className="absolute top-4 right-4 bg-slate-950/50 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 p-2 rounded-lg transition-colors border border-transparent hover:border-rose-500/30"
-                    title="Ocultar local de este escaneo"
+          return (
+          <div className="animate-in fade-in duration-500">
+            {/* Header + Contadores */}
+            <div className="flex flex-wrap items-center gap-3 mb-6">
+              <h2 className="text-2xl font-bold flex items-center gap-2">
+                <Star className="text-amber-400" /> Locales
+              </h2>
+              <div className="ml-auto flex flex-wrap gap-2">
+                {[['todos', '🗂️ Todos', opportunities.length], ...Object.entries(STATUS_CONFIG).map(([k,v]) => [k, v.label, counts[k]])].map(([key, label, count]) => (
+                  <button key={key} onClick={() => setTriageFilter(key)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-bold transition-all ${
+                      triageFilter === key
+                        ? 'bg-indigo-500 text-white border-indigo-400 shadow-lg shadow-indigo-500/20'
+                        : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-500'
+                    }`}
                   >
-                    <Trash2 size={16} />
+                    {key !== 'todos' && <span className={`w-2 h-2 rounded-full ${STATUS_CONFIG[key]?.dot}`}></span>}
+                    {label} <span className="opacity-70">({count})</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {visiblePlaces.length === 0 ? (
+              <div className="py-24 text-center text-slate-500 bg-slate-900/50 rounded-2xl border border-dashed border-slate-800">
+                <p className="text-lg">No hay locales en esta categoría.</p>
+                <p className="text-sm mt-1 text-slate-600">Cambia el filtro de vista o realiza un nuevo rastreo.</p>
+              </div>
+            ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {visiblePlaces.map((place, idx) => {
+                const status = place.reviewStatus || 'sin_revisar';
+                const sc = STATUS_CONFIG[status];
+                return (
+                <div key={idx} className={`group relative bg-slate-900 border ${sc.card} rounded-2xl p-6 transition-all flex flex-col justify-between ${status === 'cerrado' ? 'opacity-50' : ''}`}>
+
+                  {/* Badge de Estado top-left */}
+                  <span className={`absolute top-4 left-4 text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border flex items-center gap-1.5 ${sc.badge}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`}></span>
+                    {sc.label}
+                  </span>
+
+                  {/* Boton Borrar (solo en cerrados o siempre) */}
+                  <button onClick={() => handleDeletePlace(latestScan.id, place.name)}
+                    className="absolute top-4 right-4 bg-slate-950/50 hover:bg-rose-500/20 text-slate-600 hover:text-rose-400 p-1.5 rounded-lg transition-colors border border-transparent hover:border-rose-500/30"
+                    title="Eliminar de la base de datos"
+                  >
+                    <Trash2 size={14} />
                   </button>
 
-                  <div>
-                    <h3 className="font-bold text-lg text-white mb-2 pr-8">{place.name}</h3>
+                  <div className="mt-7">
+                    <h3 className="font-bold text-lg text-white mb-2 pr-2">{place.name}</h3>
                     <div className="flex items-center text-xs text-slate-400 gap-3 mb-4">
                       <span className="flex items-center gap-1"><Star size={12} className="text-amber-400" /> {place.rating} ({place.reviews})</span>
                       <span className="flex items-center gap-1 font-bold text-indigo-400">Rank #{place.rank}</span>
                     </div>
 
-                    <div className="space-y-3 mb-6 bg-slate-950 p-4 rounded-xl border border-white/5 text-sm">
+                    <div className="space-y-3 mb-5 bg-slate-950 p-4 rounded-xl border border-white/5 text-sm">
                       <div className="flex items-center gap-3">
                         <Phone size={14} className="text-slate-500 shrink-0" />
                         {place.phone ? <a href={`tel:${place.phone.replace(/\s/g, '')}`} className="text-indigo-400 hover:underline truncate">{place.phone}</a> : <span className="text-slate-600">No listado</span>}
@@ -448,24 +513,47 @@ export default function MarketSpiderDashboard() {
                         <Globe size={14} className="text-slate-500 shrink-0" />
                         {place.website ? <a href={place.website} target="_blank" className="text-indigo-400 hover:underline truncate">{place.website.replace('https://', '').replace('http://', '')}</a> : <span className="text-slate-600">No listada</span>}
                       </div>
+                      <div className="flex items-center gap-3">
+                        <MapIcon size={14} className="text-slate-500 shrink-0" />
+                        <a href={place.gmapsLink || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name + ' ' + (latestScan?.location || ''))}`}
+                          target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline truncate">
+                          Ver en Google Maps
+                        </a>
+                      </div>
                     </div>
                   </div>
-                  <div className="pt-4 border-t border-slate-800 flex justify-between items-center">
-                    <span className="bg-indigo-500/10 text-indigo-400 text-xs px-2 py-1 rounded border border-indigo-500/20">{place.opportunityType || 'Oportunidad'}</span>
-                    <div className="flex gap-2">
-                      <button onClick={() => handleAddCRM(place)} className="flex items-center gap-1 text-sm bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 px-3 py-2 rounded-lg transition-colors border border-amber-500/20">
-                        <PlusCircle size={16} /> CRM
+
+                  {/* Botonera de Triaje Rápido */}
+                  <div className="pt-3 border-t border-slate-800 space-y-2">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-2">Clasificar como:</p>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button onClick={() => handleSetStatus(place, 'evaluando')}
+                        className={`text-xs py-1.5 px-2 rounded-lg border transition-all font-medium ${ status === 'evaluando' ? 'bg-amber-500/20 text-amber-400 border-amber-500/40' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-amber-500/40 hover:text-amber-400' }`}>
+                        🟡 Evaluando
                       </button>
-                      <button onClick={() => handleCopyPitch(place)} className="flex items-center gap-2 text-sm bg-white/5 hover:bg-white/10 text-white px-3 py-2 rounded-lg transition-colors border border-white/10">
-                        <Copy size={16} /> Pitch
+                      <button onClick={() => handleSetStatus(place, 'crm')}
+                        className={`text-xs py-1.5 px-2 rounded-lg border transition-all font-medium ${ status === 'crm' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-emerald-500/40 hover:text-emerald-400' }`}>
+                        🟢 → CRM
+                      </button>
+                      <button onClick={() => handleSetStatus(place, 'poco_valor')}
+                        className={`text-xs py-1.5 px-2 rounded-lg border transition-all font-medium ${ status === 'poco_valor' ? 'bg-rose-500/20 text-rose-400 border-rose-500/40' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-rose-500/40 hover:text-rose-400' }`}>
+                        🔴 Poco Valor
+                      </button>
+                      <button onClick={() => handleSetStatus(place, 'cerrado')}
+                        className={`text-xs py-1.5 px-2 rounded-lg border transition-all font-medium ${ status === 'cerrado' ? 'bg-slate-700 text-slate-300 border-slate-600' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-500 hover:text-slate-300' }`}>
+                        ⚫ Cerrado
                       </button>
                     </div>
+                    <button onClick={() => handleCopyPitch(place)} className="w-full flex items-center justify-center gap-2 text-xs bg-white/5 hover:bg-white/10 text-slate-300 py-1.5 px-3 rounded-lg transition-colors border border-white/10">
+                      <Copy size={13} /> Copiar Pitch de Venta
+                    </button>
                   </div>
-                </div>
-              ))}
+                </div>);
+              })}
             </div>
-          </div>
-        )}
+            )}
+          </div>);
+        })()}
 
         {/* ======================== TAB: CRM ======================== */}
         {activeTab === 'crm' && (

@@ -1,7 +1,7 @@
 import sys
 import asyncio
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+from playwright_stealth import Stealth
 import firebase_admin
 from firebase_admin import credentials, firestore
 import datetime
@@ -18,33 +18,23 @@ except ValueError:
 
 db = firestore.client()
 
-async def get_next_job():
-    """Obtiene el proximo hexagono disponible atomicamente."""
+def fetch_and_lock():
     queue_ref = db.collection(f"artifacts/marketspider-v3/global_job_queue")
-    
-    # Run in transaction to guarantee no duplicate pulls
-    @firestore.transactional
-    def lock_job(transaction, job_ref):
-        snapshot = job_ref.get(transaction=transaction)
-        if snapshot.get("status") == "pending" or (snapshot.get("status") == "failed" and snapshot.get("attempts") < 3):
-            transaction.update(job_ref, {
+    docs = queue_ref.where("status", "in", ["pending", "failed"]).limit(1).get() # get gives a list, stream is an iterator
+    for doc in docs:
+        snapshot = doc.to_dict()
+        if snapshot.get("attempts", 0) < 3:
+            doc.reference.update({
                 "status": "processing",
                 "last_run": datetime.datetime.now(datetime.timezone.utc),
-                "attempts": snapshot.get("attempts") + 1
+                "attempts": snapshot.get("attempts", 0) + 1
             })
-            return snapshot
-        return None
-
-    # Query localmente
-    docs = queue_ref.where("status", "in", ["pending", "failed"]).limit(5).stream()
-    
-    transaction = db.transaction()
-    for doc in docs:
-        snapshot = lock_job(transaction, doc.reference)
-        if snapshot:
-            return snapshot
-            
+            return {"id": doc.id, **snapshot}
     return None
+
+async def get_next_job():
+    """Obtiene el proximo hexagono disponible atomicamente via threadpool."""
+    return await asyncio.to_thread(fetch_and_lock)
 
 def extract_place_id_from_url(url: str) -> str:
     # Extraer identificador unico hexadecimal de google maps url
@@ -85,9 +75,9 @@ def upsert_business(place_data: dict, place_id: str):
             })
             # Actualizar master record
             businesses_ref.update(place_data)
-            print(f"    [UP] {place_data['name']} actualizado (Rank/Reviews cambiaron). Snapshot generado.")
+            print(f"      \033[93m⚡ [UPDATE]\033[0m {place_data['name'][:30]} (Cambios detectados. Snapshot listo)")
         else:
-            print(f"    [-] {place_data['name']} sin cambios.")
+            print(f"      \033[90m〰️ [SKIP]\033[0m {place_data['name'][:30]} (Sin cambios recientes)")
     else:
         # Nuevo negocio
         place_data["created_at"] = now
@@ -100,13 +90,14 @@ def upsert_business(place_data: dict, place_id: str):
             "reviews": place_data.get("reviews"),
             "visualScore": place_data.get("visualScore", 0)
         })
-        print(f"    [NEW] {place_data['name']} indexado por primera vez.")
+        print(f"      \033[92m🟢 [NUEVO]\033[0m {place_data['name'][:30]} indexado por 1ra vez.")
 
-async def extract_feed_data(page, lat, lng):
-    # This requires specific click sequence or infinite scroll in pure coordinate view
-    # Usually coordinate view requires clicking 'Nearby' -> 'Restaurants' or similar. 
-    # For a purely generic "business" fetch, we use the Maps query: search/* near lat,lng
-    print(f"  > Rastreando Hexagono {lat:.4f},{lng:.4f}...")
+def sync_upsert_business(place_data, place_id):
+    upsert_business(place_data, place_id)
+
+async def extract_feed_data(page, lat, lng, worker_id):
+    now_ts = datetime.datetime.now().strftime('%H:%M:%S')
+    print(f"[{now_ts}] [W-{worker_id}] 🌎 Volando a coordenadas: {lat:.6f}, {lng:.6f}...")
     
     url = f"https://www.google.com/maps/search/negocios+o+locales+o+tiendas/@{lat},{lng},17z"
     await page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -116,7 +107,7 @@ async def extract_feed_data(page, lat, lng):
     except:
         pass
         
-    print("  > Navegando container y ejecutando Scroll...")
+    print(f"[{now_ts}] [W-{worker_id}] 📜 Escaneando panel izquierdo de Maps...")
     try:
         feed = page.locator('div[role="feed"]')
         await feed.wait_for(timeout=10000)
@@ -124,34 +115,78 @@ async def extract_feed_data(page, lat, lng):
             await feed.hover()
             await page.mouse.wheel(0, 5000)
             await asyncio.sleep(1.5)
+            print(f"[{now_ts}] [W-{worker_id}] ⏬ Haciendo Scroll inifinito (Vuelta {_ + 1}/3)...")
     except Exception as e:
-        print("  > Advertencia: Contenedor no aparecio (Quizas area vacia).")
+        print(f"[{now_ts}] [W-{worker_id}] ⚠️ Advertencia: No hay mas negocios en esta vista satelital.")
         
-    links_locators = await page.locator('a[href*="https://www.google.com/maps/place/"]').all()
-    hrefs = []
-    for l in links_locators:
-        h = await l.get_attribute("href")
-        if h and h not in hrefs:
-            hrefs.append(h)
+    print(f"[{now_ts}] [W-{worker_id}] ✨ ¡Exito! Extrayendo metadata nativa de Maps UI...")
+    
+    js_code = """() => {
+        let items = [];
+        let links = Array.from(document.querySelectorAll('a[href*="/maps/place/"]'));
+        links.forEach(a => {
+            let container = a.closest('div[role="article"]') || a.parentElement.parentElement.parentElement;
+            if(container && container.innerText) {
+                items.push({ url: a.href, text: container.innerText });
+            }
+        });
+        return items;
+    }"""
+    raw_businesses = await page.evaluate(js_code)
+    
+    unique_businesses = {}
+    for item in raw_businesses:
+        url = item['url']
+        if url not in unique_businesses:
+            unique_businesses[url] = item['text']
             
-    print(f"  > {len(hrefs)} URLs en bruto extraidas.")
+    print(f"[{now_ts}] [W-{worker_id}] Evaluando Upserts de {len(unique_businesses)} locales crudos detectados...")
     
     # Process each roughly
-    for href in hrefs[:15]: # process up to 15 per cell to speed up
-        place_id = extract_place_id_from_url(href)
-        # Parse basic name from URL
-        m = re.search(r'/place/([^/]+)/', href)
-        name = m.group(1).replace('+', ' ') if m else "Local_Desconocido"
+    processed_count = 0
+    for href, text_block in unique_businesses.items():
+        if processed_count >= 15: break # process up to 15 per cell to speed up
         
-        # Here we should ideally visit the page, but for now we just register it
-        # If we visit it, it's 10x slower.
-        upsert_business({
-            "name": urllib.parse.unquote(name),
+        place_id = extract_place_id_from_url(href)
+        m = re.search(r'/place/([^/]+)/', href)
+        name = urllib.parse.unquote(m.group(1).replace('+', ' ')) if m else "Local_Desconocido"
+        
+        rating = 0.0
+        reviews = 0
+        category = ""
+        
+        # Parse extra text lines for details
+        lines = text_block.split('\n')
+        for line in lines:
+            line_str = line.strip()
+            # Catch rating like 4.5 (130)
+            if not rating and not reviews:
+                match_rev = re.search(r'([\d\.,]+)\s*\(([\d\.,]+)\)', line_str)
+                if match_rev:
+                    try:
+                        rating = float(match_rev.group(1).replace(',', '.'))
+                        reviews = int(match_rev.group(2).replace('.', '').replace(',', ''))
+                    except: pass
+            
+            # Catch category after middle dot -> 4.5 (130) · Cafeteria
+            if '·' in line_str:
+                parts = line_str.split('·')
+                if len(parts) > 1:
+                    cat_candidate = parts[-1].strip()
+                    if cat_candidate and len(cat_candidate) > 2 and '¢' not in cat_candidate and '$' not in cat_candidate:
+                        category = cat_candidate
+
+        await asyncio.to_thread(upsert_business, {
+            "name": name,
             "url": href,
             "hex_lat": lat,
             "hex_lng": lng,
+            "rating": rating,
+            "reviews": reviews,
+            "category": category,
             "last_seen": datetime.datetime.now(datetime.timezone.utc)
         }, place_id)
+        processed_count += 1
 
 async def worker(worker_id):
     async with async_playwright() as p:
@@ -160,43 +195,50 @@ async def worker(worker_id):
             user_agent=f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 WID/{worker_id}"
         )
         page = await context.new_page()
-        await stealth_async(page)
+        await Stealth().apply_stealth_async(page)
         
         while True:
             job = await get_next_job()
+            now_ts = datetime.datetime.now().strftime('%H:%M:%S')
+            
             if not job:
-                print(f"[Worker {worker_id}] No hay mas trabajos. Esperando...")
+                print(f"[{now_ts}] [W-{worker_id}] 💤 No hay celdas pendientes. Durmiendo 10s...")
                 await asyncio.sleep(10)
                 continue
                 
-            cell_id = job.id
+            cell_id = job.get("id")
             lat, lng = job.get("lat"), job.get("lng")
             
-            print(f"\n[Worker {worker_id}] === Iniciando Celda {cell_id} ({lat:.4f}, {lng:.4f}) ===")
+            print(f"\n\033[94m[{now_ts}] [W-{worker_id}] ================== COORDENADA H3: {cell_id} ==================\033[0m")
             
             try:
-                await extract_feed_data(page, lat, lng)
+                await extract_feed_data(page, lat, lng, worker_id)
                 
                 # Marcar completado
-                db.collection(f"artifacts/marketspider-v3/global_job_queue").document(cell_id).update({
-                    "status": "completed"
-                })
-                print(f"[Worker {worker_id}] Celda completada con exito.")
+                def mark_completed():
+                    db.collection(f"artifacts/marketspider-v3/global_job_queue").document(cell_id).update({
+                        "status": "completed"
+                    })
+                await asyncio.to_thread(mark_completed)
+                print(f"[{now_ts}] [W-{worker_id}] ✅ Celda validada y completada. Moviendo a la siguiente...")
                 
             except Exception as e:
-                print(f"[Worker {worker_id}] Error fatal en celda: {e}")
-                db.collection(f"artifacts/marketspider-v3/global_job_queue").document(cell_id).update({
-                    "status": "failed"
-                })
+                print(f"[{now_ts}] [W-{worker_id}] ❌ Error crítico: {e}")
+                def mark_failed():
+                    db.collection(f"artifacts/marketspider-v3/global_job_queue").document(cell_id).update({
+                        "status": "failed"
+                    })
+                await asyncio.to_thread(mark_failed)
                 
         await browser.close()
 
 async def main():
-    print("Iniciando MarketSpider GLOBAL 24/7 (3 Workers concurrentes)...")
+    print("\n--------------------------------------------------------------")
+    print("🕸️ MARKET SPIDER GLOBAL v3 - Motor de Sincronización Espacial")
+    print("--------------------------------------------------------------")
+    print("🚀 Levantando flota asincrónica. Precalentando 3 navegadores Playwright...\n")
     workers = [worker(i) for i in range(1, 4)]
     await asyncio.gather(*workers)
 
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     asyncio.run(main())

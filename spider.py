@@ -176,7 +176,8 @@ def extract_place_data(page, url_href, rank):
         "lastPhoto": last_photo_str,
         "opportunityType": opp_type,
         "webScore": web_audit["score"],
-        "webAudit": web_audit
+        "webAudit": web_audit,
+        "gmapsLink": href
     }
 
 def run_spider_engine(config: dict) -> dict:
@@ -186,50 +187,63 @@ def run_spider_engine(config: dict) -> dict:
 
     print(f"\n  🔍 Rastreando en Google Maps: '{rubro} en {ciudad}' (máx {max_results} locales)...")
 
+    tipo = config.get("type", "search")
     query = f"{rubro} en {ciudad}"
-    url = f"https://www.google.com/maps/search/{urllib.parse.quote(query)}"
     places = []
 
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=40000)
             
-            try:
-                page.locator("button:has-text('Aceptar')", timeout=2000).click()
-            except:
-                pass
+            if tipo == "enrich_urls":
+                target_places = config.get("places", [])
+                print(f"  📌 {len(target_places)} locales inyectados desde Tracker Global. Extrayendo...")
+                for rank, pobj in enumerate(target_places, start=1):
+                    href = pobj.get("url")
+                    extracted = extract_place_data(page, href, rank)
+                    if extracted:
+                        places.append(extracted)
+                        current_time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        print(f"    [{rank:02d}] {extracted['name']:<25} | Rank: {extracted['rank']} | Phone: {extracted['phone']} : {current_time_str}")
+            else:
+                url = f"https://www.google.com/maps/search/{urllib.parse.quote(query)}"
+                page.goto(url, wait_until="domcontentloaded", timeout=40000)
+                
+                try:
+                    page.locator("button:has-text('Aceptar')", timeout=2000).click()
+                except:
+                    pass
 
-            # Despliegue de Sidebar list
-            print("  ⏳ Deslizando panel para recolectar competidores...")
-            try:
-                feed = page.locator('div[role="feed"]')
-                feed.wait_for(timeout=10000)
-                for _ in range(4):
-                    feed.hover()
-                    page.mouse.wheel(0, 5000)
-                    page.wait_for_timeout(1000)
-            except:
-                print("  ⚠️ Contenedor de lista no estandar. Leyendo enlaces de pantalla actual...")
+                # Despliegue de Sidebar list
+                print("  ⏳ Deslizando panel para recolectar competidores...")
+                try:
+                    feed = page.locator('div[role="feed"]')
+                    feed.wait_for(timeout=10000)
+                    for _ in range(4):
+                        feed.hover()
+                        page.mouse.wheel(0, 5000)
+                        page.wait_for_timeout(1000)
+                except:
+                    print("  ⚠️ Contenedor de lista no estandar. Leyendo enlaces de pantalla actual...")
 
-            # Acumular hrefs limpios
-            links_locators = page.locator('a[href*="https://www.google.com/maps/place/"]').all()
-            hrefs = []
-            for l in links_locators:
-                h = l.get_attribute("href")
-                if h and h not in hrefs:
-                    hrefs.append(h)
-            
-            hrefs = hrefs[:max_results]
-            print(f"  📌 {len(hrefs)} locales detectados. Extrayendo datos específicos...")
+                # Acumular hrefs limpios
+                links_locators = page.locator('a[href*="https://www.google.com/maps/place/"]').all()
+                hrefs = []
+                for l in links_locators:
+                    h = l.get_attribute("href")
+                    if h and h not in hrefs:
+                        hrefs.append(h)
+                
+                hrefs = hrefs[:max_results]
+                print(f"  📌 {len(hrefs)} locales detectados. Extrayendo datos específicos...")
 
-            for rank, href in enumerate(hrefs, start=1):
-                pdata = extract_place_data(page, href, rank)
-                if pdata:
-                    places.append(pdata)
-                    current_time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    print(f"    [{rank:02d}] {pdata['name']:<25} | Rank: {pdata['rank']} | Phone: {pdata['phone']} : {current_time_str}")
+                for rank, href in enumerate(hrefs, start=1):
+                    pdata = extract_place_data(page, href, rank)
+                    if pdata:
+                        places.append(pdata)
+                        current_time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        print(f"    [{rank:02d}] {pdata['name']:<25} | Rank: {pdata['rank']} | Phone: {pdata['phone']} : {current_time_str}")
 
             browser.close()
     except Exception as e:

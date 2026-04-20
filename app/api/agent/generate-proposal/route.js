@@ -52,7 +52,7 @@ export async function POST(req) {
 
     // 3. Generación Inteligente mediante SDK
     const { object } = await generateObject({
-      model: google('gemini-2.5-flash'),
+      model: google('gemini-1.5-flash-latest'),
       schema: z.object({
         gancho_inicial: z.string().describe("Párrafo de apertura súper enganchador saludando al negocio por su nombre."),
         analisis_competencia_maps: z.string().describe("Argumento sobre cómo 3 competidores locales les podrían robar clics por falta de SEO local o fotos borrosas en Maps."),

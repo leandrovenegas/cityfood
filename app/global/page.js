@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { collection, query, orderBy, onSnapshot, limit, getAggregateFromServer, count } from "firebase/firestore";
+import { collection, query, orderBy, onSnapshot, limit, getAggregateFromServer, count, addDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, signInAnonymously } from '../firebase';
 import { ArrowLeft, Loader2, Globe2, Activity, Map, RefreshCw } from 'lucide-react';
 
@@ -11,10 +11,13 @@ export default function GlobalTrackerView() {
   const [businesses, setBusinesses] = useState([]);
   const [stats, setStats] = useState({ total_scanned: 0, queue_size: 6615 });
   const [loading, setLoading] = useState(true);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [currentUser, setCurrentUser] = useState(null);
 
   // Auth and Data Fetching
   useEffect(() => {
-    signInAnonymously(auth).then(async () => {
+    signInAnonymously(auth).then(async (userCredential) => {
+      setCurrentUser(userCredential.user.uid);
         
       // Fetch stats using aggregation to avoid downloading tens of thousands of docs
       try {
@@ -35,6 +38,36 @@ export default function GlobalTrackerView() {
       return () => unsub();
     });
   }, []);
+
+  const toggleSelection = (id) => {
+      const newSet = new Set(selectedIds);
+      if(newSet.has(id)) newSet.delete(id);
+      else newSet.add(id);
+      setSelectedIds(newSet);
+  };
+  
+  const handleAbsorb = async () => {
+      if(selectedIds.size === 0) return;
+      if(!currentUser) return;
+      
+      const selectedBusinesses = businesses.filter(b => selectedIds.has(b.id));
+      if(!confirm(`¿Transferir ${selectedBusinesses.length} locales al Directorio Consolidado para extracción exhaustiva?`)) return;
+      
+      const jobCol = collection(db, `artifacts/${APP_ID}/users/${currentUser}/scan_jobs`);
+      await addDoc(jobCol, {
+          status: "pending",
+          config: {
+              type: "enrich_urls",
+              rubro: "Transferencia Especial",
+              ciudad: "Radar Global",
+              places: selectedBusinesses.map(b => ({ name: b.name, url: b.url }))
+          },
+          created_at: serverTimestamp(),
+      });
+      
+      setSelectedIds(new Set());
+      alert("Locales transferidos. Enciende 'spider.py' (tu rastreador local de Detalle) para que los absorba inmediatamente.");
+  };
 
   if (loading) return (
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 gap-4">
@@ -72,17 +105,33 @@ export default function GlobalTrackerView() {
 
       {/* TABLA ESTILO EXCEL PARA ULTIMOS EXTRAIDOS */}
       <main className="max-w-screen-2xl mx-auto w-full flex-1 bg-slate-900 border border-slate-700 rounded-xl overflow-hidden flex flex-col relative shadow-2xl">
-        <div className="bg-slate-800/50 p-4 border-b border-slate-700 flex justify-between items-center">
+        <div className="bg-slate-800/50 p-4 border-b border-slate-700 flex justify-between items-center flex-wrap gap-4">
             <h3 className="font-bold text-white flex items-center gap-2"><RefreshCw size={16} className="text-fuchsia-400" /> Stream de Nodos en Vivo (Últimos 50)</h3>
-            <span className="text-xs bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full border border-emerald-500/20">Workers Corriendo...</span>
+            
+            <div className="flex items-center gap-3">
+                {selectedIds.size > 0 && (
+                    <button 
+                        onClick={handleAbsorb}
+                        className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 font-bold px-4 py-2 rounded-lg text-sm border border-emerald-500/30 transition-colors shadow-sm focus:outline-none"
+                    >
+                        Extraer Exhaustivamente ({selectedIds.size})
+                    </button>
+                )}
+                <span className="text-xs bg-fuchsia-500/10 text-fuchsia-400 px-3 py-1 rounded-full border border-fuchsia-500/20 flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-fuchsia-400 animate-pulse"></span> Workers Corriendo
+                </span>
+            </div>
         </div>
         
         <div className="overflow-x-auto flex-1 h-[calc(100vh-350px)]">
           <table className="w-full text-sm text-left whitespace-nowrap min-w-max border-collapse">
             <thead className="text-xs text-slate-300 uppercase bg-slate-800 sticky top-0 z-10 shadow-sm border-b border-slate-700">
               <tr>
+                <th className="px-6 py-4 font-bold border-r border-slate-700/50 w-10 text-center">Sel</th>
                 <th className="px-6 py-4 font-bold border-r border-slate-700/50">Place ID (UID Google)</th>
-                <th className="px-6 py-4 font-bold border-r border-slate-700/50">Nombre Empresa</th>
+                <th className="px-6 py-4 font-bold border-r border-slate-700/50">Local</th>
+                <th className="px-6 py-4 font-bold border-r border-slate-700/50 text-center">Categoría</th>
+                <th className="px-6 py-4 font-bold border-r border-slate-700/50 text-center">Rating</th>
                 <th className="px-6 py-4 font-bold border-r border-slate-700/50 text-center">Cuadrícula Origen</th>
                 <th className="px-6 py-4 font-bold border-r border-slate-700/50 text-right">Último Upsert</th>
               </tr>
@@ -96,12 +145,22 @@ export default function GlobalTrackerView() {
                 </tr>
               ) : (
                 businesses.map((place, idx) => (
-                  <tr key={`${place.id}-${idx}`} className="hover:bg-slate-800/80 transition-colors">
-                    <td className="px-6 py-3 border-r border-slate-800 font-mono text-xs text-slate-400">
+                  <tr key={`${place.id}-${idx}`} onClick={() => toggleSelection(place.id)} className={`hover:bg-slate-800/80 transition-colors cursor-pointer ${selectedIds.has(place.id) ? 'bg-indigo-900/40' : ''}`}>
+                    <td className="px-6 py-3 border-r border-slate-800 text-center">
+                        <input type="checkbox" checked={selectedIds.has(place.id)} readOnly className="rounded border-slate-600 bg-slate-800 text-fuchsia-500 focus:ring-fuchsia-500 focus:ring-offset-slate-900" />
+                    </td>
+                    <td className="px-6 py-3 border-r border-slate-800 font-mono text-xs text-slate-400 max-w-[150px] truncate">
                         {place.id}
                     </td>
-                    <td className="px-6 py-3 border-r border-slate-800 font-bold text-fuchsia-100 max-w-[250px] truncate">
+                    <td className="px-6 py-3 border-r border-slate-800 font-bold text-fuchsia-100 max-w-[200px] truncate">
                         {place.name}
+                    </td>
+                    <td className="px-6 py-3 border-r border-slate-800 text-center text-slate-300 max-w-[150px] truncate">
+                        {place.category || '-'}
+                    </td>
+                    <td className="px-6 py-3 border-r border-slate-800 text-center">
+                        <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800 font-medium text-amber-400">{place.rating || 'S/D'}</span>
+                        <span className="text-xs text-slate-500 ml-1">({place.reviews || 0})</span>
                     </td>
                     <td className="px-6 py-3 border-r border-slate-800 text-center text-slate-500 flex gap-2 justify-center">
                         <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">Lat: {place.hex_lat?.toFixed(4) || 'N/A'}</span>
