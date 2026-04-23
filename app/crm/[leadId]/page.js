@@ -1,12 +1,13 @@
 'use client';
 import React, { useState, useEffect, use } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { doc, onSnapshot, updateDoc, serverTimestamp, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { db, auth, signInAnonymously } from '../../firebase';
 import {
   ArrowLeft, Phone, Globe, MapPin, Star, Loader2, Plus, Trash2,
   CheckCircle, Circle, ExternalLink, FileText, MessageSquare, TrendingUp,
-  Calendar, User, Link2, RefreshCw, Trophy, Handshake, Target, Edit3, Save, X
+  Calendar, User, Link2, RefreshCw, Trophy, Handshake, Target, Edit3, Save, X, CheckSquare, Square, ListTodo
 } from 'lucide-react';
 
 const APP_ID = 'marketspider-v3';
@@ -83,6 +84,7 @@ function ContactEntry({ entry, leadId, onDelete }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function LeadDetailPage({ params }) {
   const { leadId } = use(params);
+  const router = useRouter();
   const [lead, setLead] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -95,6 +97,11 @@ export default function LeadDetailPage({ params }) {
   const [newDocName, setNewDocName] = useState('');
   const [newDocUrl, setNewDocUrl] = useState('');
   const [addingDoc, setAddingDoc] = useState(false);
+
+  // New task form
+  const [newTaskText, setNewTaskText] = useState('');
+  const [addingTask, setAddingTask] = useState(false);
+  const [savingTask, setSavingTask] = useState(false);
 
   useEffect(() => {
     signInAnonymously(auth).then(() => {
@@ -160,6 +167,34 @@ export default function LeadDetailPage({ params }) {
     await updateDoc(ref(), { documents: updatedDocs, updatedAt: serverTimestamp() });
   };
 
+  // ── Tasks ─────────────────────────────────────────────────────────────────
+  const handleAddTask = async () => {
+    if (!newTaskText.trim()) return;
+    setSavingTask(true);
+    const entry = {
+      id: Date.now().toString(),
+      text: newTaskText.trim(),
+      completed: false,
+      createdAt: new Date().toLocaleDateString('es-CL'),
+    };
+    await updateDoc(ref(), { tasks: arrayUnion(entry), updatedAt: serverTimestamp() });
+    setNewTaskText('');
+    setAddingTask(false);
+    setSavingTask(false);
+  };
+
+  const handleToggleTask = async (task) => {
+    const updatedTasks = (lead.tasks || []).map(t => 
+      t.id === task.id ? { ...t, completed: !t.completed } : t
+    );
+    await updateDoc(ref(), { tasks: updatedTasks, updatedAt: serverTimestamp() });
+  };
+
+  const handleDeleteTask = async (taskId) => {
+    const updatedTasks = (lead.tasks || []).filter(t => t.id !== taskId);
+    await updateDoc(ref(), { tasks: updatedTasks, updatedAt: serverTimestamp() });
+  };
+
   // ── Field edit ────────────────────────────────────────────────────────────
   const handleFieldBlur = async (field, value) => {
     await updateDoc(ref(), { [field]: value, updatedAt: serverTimestamp() });
@@ -188,9 +223,9 @@ export default function LeadDetailPage({ params }) {
       <header className="sticky top-0 z-30 bg-slate-950/90 backdrop-blur border-b border-slate-800 px-6 py-4">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <Link href="/?tab=crm" className="text-slate-400 hover:text-white transition-colors">
+            <button onClick={() => router.back()} className="text-slate-400 hover:text-white transition-colors">
               <ArrowLeft size={20} />
-            </Link>
+            </button>
             <div>
               <h1 className="text-xl font-extrabold text-white leading-tight">{lead.name}</h1>
               <p className="text-xs text-slate-500">Rank #{lead.rank} · {lead.category || 'Sin categoría'} · {lead.location || ''}</p>
@@ -315,6 +350,72 @@ export default function LeadDetailPage({ params }) {
                     </button>
                   );
                 })}
+              </div>
+            </section>
+
+            {/* Todo List / Tareas Pendientes */}
+            <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                  <ListTodo size={14} className="text-emerald-400" /> Tareas Pendientes
+                  <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded text-[10px]">
+                    {(lead.tasks || []).filter(t => !t.completed).length}
+                  </span>
+                </h2>
+                <button onClick={() => setAddingTask(!addingTask)}
+                  className="flex items-center gap-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">
+                  <Plus size={14} /> Tarea
+                </button>
+              </div>
+
+              {addingTask && (
+                <div className="mb-4 p-4 bg-slate-800 rounded-xl border border-emerald-500/20 space-y-3">
+                  <label className="text-[10px] text-emerald-400 font-bold uppercase">Nueva Tarea</label>
+                  <input
+                    type="text"
+                    value={newTaskText}
+                    onChange={e => setNewTaskText(e.target.value)}
+                    placeholder="Ej: Enviar presupuesto, Llamar para reunión..."
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 focus:outline-none transition-colors"
+                    autoFocus
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddTask()}
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={handleAddTask} disabled={savingTask}
+                      className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-black font-bold px-4 py-2 rounded-lg text-xs transition-colors disabled:opacity-50">
+                      {savingTask ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} Guardar
+                    </button>
+                    <button onClick={() => { setAddingTask(false); setNewTaskText(''); }}
+                      className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-4 py-2 rounded-lg transition-colors">
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                {(lead.tasks || []).length === 0 ? (
+                  <div className="py-8 text-center text-slate-600 border border-dashed border-slate-800 rounded-xl">
+                    <ListTodo size={22} className="mx-auto mb-2 opacity-40" />
+                    <p className="text-sm">Todo al día.</p>
+                    <p className="text-xs mt-1">Agrega tareas pendientes para este lead.</p>
+                  </div>
+                ) : (
+                  [...(lead.tasks || [])].sort((a, b) => Number(a.completed) - Number(b.completed)).map(task => (
+                    <div key={task.id} className={`flex items-start gap-3 bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-3 group transition-colors ${task.completed ? 'opacity-50' : ''}`}>
+                      <button onClick={() => handleToggleTask(task)} className={`mt-0.5 shrink-0 ${task.completed ? 'text-emerald-500' : 'text-slate-500 hover:text-emerald-400'} transition-colors`}>
+                        {task.completed ? <CheckSquare size={16} /> : <Square size={16} />}
+                      </button>
+                      <div className="min-w-0 flex-1">
+                        <p className={`text-sm ${task.completed ? 'text-slate-500 line-through' : 'text-slate-200'}`}>{task.text}</p>
+                      </div>
+                      <button onClick={() => handleDeleteTask(task.id)}
+                        className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-rose-400 transition-all p-1 shrink-0">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             </section>
           </div>

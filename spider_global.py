@@ -197,6 +197,7 @@ async def extract_feed_data(page, lat, lng, worker_id):
 
         await asyncio.to_thread(upsert_business, {
             "name": name,
+            "name_lower": name.lower() if name else "",
             "url": href,
             "hex_lat": lat,
             "hex_lng": lng,
