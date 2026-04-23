@@ -1,9 +1,9 @@
 'use client';
 import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
-import { collection, query, orderBy, onSnapshot, updateDoc, doc, getDoc } from "firebase/firestore";
+import { collection, query, orderBy, onSnapshot, updateDoc, doc, getDoc, addDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, signInAnonymously } from '../firebase';
-import { ArrowLeft, Search, Loader2, Star, Phone, Globe, MapPin, X, ExternalLink, Play, Calendar, Activity, Filter, Server, ShieldCheck, Smartphone } from 'lucide-react';
+import { ArrowLeft, Search, Loader2, Star, Phone, Globe, MapPin, X, ExternalLink, Play, Calendar, Activity, Filter, Server, ShieldCheck, Smartphone, Target, CheckCircle } from 'lucide-react';
 
 const APP_ID = "marketspider-v3";
 const USER_ID = "Hp1YGeni2DgiWrtrIKUgmgki7UL2";
@@ -104,6 +104,33 @@ export default function DirectoryExcelView() {
     } catch(err) {
       console.error(err);
       alert("Error crítico conectando a la API de auditoría.");
+    } finally {
+      setAuditing(false);
+    }
+  };
+
+  const handleMoveToCRM = async () => {
+    if (!selectedPlace) return;
+    setAuditing(true); // Reutilizamos el estado de carga
+    try {
+      // Verificar si ya existe (opcional, pero recomendado)
+      // Por simplicidad en esta vista de "excel", lo agregamos directamente
+      await addDoc(collection(db, `artifacts/${APP_ID}/users/${USER_ID}/crm_leads`), {
+        name: selectedPlace.name,
+        phone: selectedPlace.phone || '',
+        website: selectedPlace.website || '',
+        rank: selectedPlace.rank || 0,
+        status: 'Prospecto',
+        notes: '',
+        gmapsLink: selectedPlace.url || '',
+        category: selectedPlace.category || '',
+        location: selectedPlace.location || '',
+        updatedAt: serverTimestamp(),
+      });
+      alert(`¡${selectedPlace.name} enviado al CRM!`);
+    } catch(err) {
+      console.error(err);
+      alert("Error al mover al CRM.");
     } finally {
       setAuditing(false);
     }
@@ -449,13 +476,22 @@ export default function DirectoryExcelView() {
                </div>
                
                {/* Location data */}
-               {(selectedPlace.lat && selectedPlace.lng) ? (
-                   <div className="pt-2">
-                       <a href={`https://www.google.com/maps/search/?api=1&query=${selectedPlace.lat},${selectedPlace.lng}`} target="_blank" className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-lg flex items-center justify-center gap-2 text-sm transition-colors border border-slate-700">
-                           <MapPin size={16} /> Abrir Geolocalización en Mapas
-                       </a>
-                   </div>
-               ) : null}
+               <div className="space-y-3 pt-2">
+                  {(selectedPlace.lat && selectedPlace.lng) && (
+                      <a href={`https://www.google.com/maps/search/?api=1&query=${selectedPlace.lat},${selectedPlace.lng}`} target="_blank" className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-lg flex items-center justify-center gap-2 text-sm transition-colors border border-slate-700">
+                          <MapPin size={16} /> Abrir Geolocalización en Mapas
+                      </a>
+                  )}
+
+                  <button 
+                    onClick={handleMoveToCRM}
+                    disabled={auditing}
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-xl flex items-center justify-center gap-2 text-sm font-extrabold transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50"
+                  >
+                    {auditing ? <Loader2 size={18} className="animate-spin" /> : <Target size={18} />}
+                    Mover Prospecto al CRM
+                  </button>
+               </div>
 
             </div>
           </div>

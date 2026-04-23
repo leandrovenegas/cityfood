@@ -70,6 +70,8 @@ export default function MarketSpiderDashboard() {
 
   const [filterCategory, setFilterCategory] = useState('');
   const [filterLocation, setFilterLocation] = useState('');
+  const [crmSearch, setCrmSearch] = useState('');
+  const [localSearch, setLocalSearch] = useState('');
 
   // 1. Auth
   useEffect(() => {
@@ -402,7 +404,6 @@ export default function MarketSpiderDashboard() {
     { id: 'opportunities', label: 'Locales', color: 'indigo' },
     { id: 'crm', label: 'Seguimiento', color: 'amber' },
     { id: 'tracking', label: 'Tracking', color: 'cyan' },
-    { id: 'map', label: 'Mapa', color: 'emerald' },
     { id: 'new-scan', label: 'Rastreo', color: 'violet' },
     { id: 'history', label: 'Historial', color: 'slate' },
   ];
@@ -453,7 +454,7 @@ export default function MarketSpiderDashboard() {
       </header>
 
       {/* Segmentador Global */}
-      {(activeTab === 'opportunities' || activeTab === 'tracking' || activeTab === 'map') && (
+      {(activeTab === 'opportunities' || activeTab === 'tracking') && (
         <div className="max-w-7xl mx-auto mb-6 bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row gap-4 items-center justify-between">
           <div className="flex items-center gap-3">
             <MapPin size={20} className="text-indigo-400" />
@@ -490,9 +491,12 @@ export default function MarketSpiderDashboard() {
           const counts = {};
           Object.keys(STATUS_CONFIG).forEach(k => counts[k] = 0);
           opportunities.forEach(p => { const s = p.reviewStatus || 'sin_revisar'; counts[s] = (counts[s] || 0) + 1; });
-          const visiblePlaces = triageFilter === 'todos'
+          const filteredByTriage = triageFilter === 'todos'
             ? opportunities
             : opportunities.filter(p => (p.reviewStatus || 'sin_revisar') === triageFilter);
+          const visiblePlaces = localSearch
+            ? filteredByTriage.filter(p => p.name?.toLowerCase().includes(localSearch.toLowerCase()))
+            : filteredByTriage;
 
           return (
           <div className="animate-in fade-in duration-500">
@@ -501,6 +505,17 @@ export default function MarketSpiderDashboard() {
               <h2 className="text-2xl font-bold flex items-center gap-2">
                 <Star className="text-amber-400" /> Locales
               </h2>
+              {/* Buscador por nombre */}
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                <input
+                  type="text"
+                  placeholder="Buscar local..."
+                  value={localSearch}
+                  onChange={e => setLocalSearch(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 text-white pl-8 pr-3 py-1.5 rounded-full text-xs focus:border-amber-500 focus:outline-none transition-colors w-40"
+                />
+              </div>
               <div className="ml-auto flex flex-wrap gap-2">
                 {[['todos', '🗂️ Todos', opportunities.length], ...Object.entries(STATUS_CONFIG).map(([k,v]) => [k, v.label, counts[k]])].map(([key, label, count]) => (
                   <button key={key} onClick={() => setTriageFilter(key)}
@@ -605,39 +620,80 @@ export default function MarketSpiderDashboard() {
         {/* ======================== TAB: CRM ======================== */}
         {activeTab === 'crm' && (
           <div className="animate-in fade-in duration-500">
-             <h2 className="text-2xl font-bold flex items-center gap-2 mb-6">
-              <Target className="text-amber-400" /> CRM / Seguimiento
-              <span className="ml-auto bg-slate-800 text-slate-300 px-3 py-1 rounded-full text-xs border border-slate-700">
-                {crmLeads.length} Prospectos
-              </span>
-            </h2>
+            <div className="flex flex-wrap items-center gap-3 mb-6">
+              <h2 className="text-2xl font-bold flex items-center gap-2">
+                <Target className="text-amber-400" /> CRM / Seguimiento
+                <span className="ml-2 bg-slate-800 text-slate-300 px-3 py-1 rounded-full text-xs border border-slate-700">
+                  {crmLeads.length} Prospectos
+                </span>
+              </h2>
+              <div className="ml-auto flex items-center gap-4">
+                {crmSearch && (
+                  <span className="text-xs text-indigo-400 font-bold animate-pulse">
+                    {crmLeads.filter(l => l.name?.toLowerCase().includes(crmSearch.toLowerCase())).length} resultados
+                  </span>
+                )}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={15} />
+                  <input
+                    type="text"
+                    placeholder="Buscar prospecto..."
+                    value={crmSearch}
+                    onChange={e => setCrmSearch(e.target.value)}
+                    className="bg-slate-900 border border-slate-700 text-white pl-9 pr-4 py-2 rounded-xl text-sm focus:border-indigo-500 focus:outline-none transition-colors w-56 shadow-inner shadow-black/20"
+                  />
+                </div>
+              </div>
+            </div>
             
             <div className="flex gap-6 overflow-x-auto pb-8 snap-x">
               {CRM_STATUSES.map(col => {
-                const colLeads = crmLeads.filter(l => l.status === col.id);
+                const colLeads = crmLeads.filter(l => {
+                  const matchesCol = l.status === col.id;
+                  const matchesSearch = !crmSearch || l.name?.toLowerCase().includes(crmSearch.toLowerCase());
+                  return matchesCol && matchesSearch;
+                });
                 const ColIcon = col.icon;
                 return (
                   <div key={col.id} className="min-w-[300px] w-[300px] flex-shrink-0 snap-start">
-                    <div className={`bg-${col.color}-500/10 border border-${col.color}-500/30 rounded-t-xl p-3 flex justify-between items-center`}>
+                    <div className={`bg-${col.color}-500/10 border border-${col.color}-500/30 rounded-t-xl p-3 flex justify-between items-center ${col.id === 'Ganado' ? 'ring-2 ring-emerald-500/50 relative overflow-hidden' : ''}`}>
+                      {col.id === 'Ganado' && <div className="absolute top-0 right-0 p-1 bg-emerald-500 text-[8px] font-extrabold text-white rotate-45 transform translate-x-3 -translate-y-3 px-4 uppercase tracking-tighter">Éxito</div>}
                       <h3 className={`font-bold text-${col.color}-400 flex items-center gap-2`}><ColIcon size={16}/> {col.id}</h3>
                       <span className="bg-slate-900 px-2 py-0.5 rounded text-xs text-slate-300">{colLeads.length}</span>
                     </div>
-                    <div className="bg-slate-900 border border-slate-800 border-t-0 rounded-b-xl min-h-[500px] p-3 space-y-3">
+                    <div className={`bg-slate-900 border border-slate-800 border-t-0 rounded-b-xl min-h-[500px] p-3 space-y-3 ${col.id === 'Ganado' ? 'bg-emerald-500/5 border-emerald-500/20' : ''}`}>
+                      {colLeads.length === 0 && (
+                        <div className="h-40 flex flex-col items-center justify-center text-slate-700 border border-dashed border-slate-800 rounded-lg">
+                           <ColIcon size={24} className="opacity-20 mb-2" />
+                           <p className="text-[10px] uppercase font-bold tracking-widest">Vacío</p>
+                        </div>
+                      )}
                       {colLeads.map(lead => (
                         <div key={lead.id} className="bg-slate-800 border border-slate-700 rounded-lg p-4 shadow-lg flex flex-col gap-3">
                           <div>
                             <div className="flex justify-between items-start mb-1">
-                              <h4 className="font-bold text-white text-sm leading-tight pr-4">{lead.name}</h4>
+                              <Link href={`/crm/${lead.id}`} className="font-bold text-white text-sm leading-tight pr-4 hover:text-indigo-400 transition-colors flex-1">
+                                {lead.name}
+                              </Link>
                               <button onClick={() => handleDeleteCRMLead(lead.id)} className="text-slate-600 hover:text-rose-400 transition-colors" title="Borrar Prospecto"><Trash2 size={14}/></button>
                             </div>
                             <div className="flex items-center text-[10px] text-slate-400 gap-2 mb-2">
                               <span>Rank #{lead.rank}</span>
+                              {lead.updatedAt && (
+                                <span className="opacity-60 flex items-center gap-1">
+                                  · <Calendar size={8} /> {new Date(lead.updatedAt?.seconds * 1000).toLocaleDateString()}
+                                </span>
+                              )}
                             </div>
                           </div>
                           
-                          <div className="flex flex-col gap-2 text-xs text-slate-300 mb-2">
+                          <div className="flex flex-col gap-1.5 text-xs text-slate-300">
                             {lead.phone && <a href={`tel:${lead.phone.replace(/\s/g,'')}`} className="flex items-center gap-2 hover:text-indigo-400"><Phone size={12}/> {lead.phone}</a>}
                             {lead.website && <a href={lead.website} target="_blank" className="flex items-center gap-2 hover:text-indigo-400"><Globe size={12}/> Sitio Web</a>}
+                            <a href={lead.gmapsLink || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lead.name)}`}
+                              target="_blank" rel="noreferrer" className="flex items-center gap-2 hover:text-blue-400 text-blue-500">
+                              <MapPin size={12}/> Ver en Google Maps
+                            </a>
                           </div>
 
                           {/* --- GAPS DE OPORTUNIDAD --- */}

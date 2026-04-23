@@ -1,4 +1,5 @@
 import sys
+print("INICIANDO SPIDER GLOBAL...")
 import asyncio
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
@@ -18,9 +19,18 @@ except ValueError:
 
 db = firestore.client()
 
+MASTER_CATEGORIES = [
+    "restaurante", "cafeteria", "pasteleria", "bar", "sushi", "pizzeria", "comida rapida",
+    "peluqueria", "barberia", "salon de belleza", "spa", "gimnasio", "clinica dental", "optica",
+    "almacen", "minimarket", "ferretería", "tienda de ropa", "veterinaria", "pet shop", "jugueteria",
+    "taller mecanico", "vulcanizacion", "repuestos automotriz", "servicio tecnico", "imprenta",
+    "ferretería industrial", "bodega", "carpinteria", "metalurgica", "gasfiteria", "electricista",
+    "abogado", "contador", "agencia de publicidad", "hotel", "hostal", "motel", "apartamento turistico"
+]
+
 def fetch_and_lock():
     queue_ref = db.collection(f"artifacts/marketspider-v3/global_job_queue")
-    docs = queue_ref.where("status", "in", ["pending", "failed"]).limit(1).get() # get gives a list, stream is an iterator
+    docs = queue_ref.where("status", "==", "pending").limit(1).get() 
     for doc in docs:
         snapshot = doc.to_dict()
         if snapshot.get("attempts", 0) < 3:
@@ -97,30 +107,39 @@ def sync_upsert_business(place_data, place_id):
 
 async def extract_feed_data(page, lat, lng, worker_id):
     now_ts = datetime.datetime.now().strftime('%H:%M:%S')
-    print(f"[{now_ts}] [W-{worker_id}] 🌎 Volando a coordenadas: {lat:.6f}, {lng:.6f}...")
     
-    url = f"https://www.google.com/maps/search/negocios+o+locales+o+tiendas/@{lat},{lng},17z"
-    await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+    # Seleccionar 3 categorias al azar para cada pasada para no ser detectado y variar
+    import random
+    selected_cats = random.sample(MASTER_CATEGORIES, 4)
+    query_str = " OR ".join(selected_cats)
     
+    print(f"[{now_ts}] [W-{worker_id}] Hyper-Scanning en: {lat:.6f}, {lng:.6f}...")
+    print(f"      BUSCANDO: {', '.join(selected_cats)}")
+    
+    url = f"https://www.google.com/maps/search/{urllib.parse.quote(query_str)}/@{lat},{lng},17z"
+    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    
+    try:
+        # Esperar a que el panel de resultados aparezca
+        await page.wait_for_selector('div[role="feed"]', timeout=5000)
+    except:
+        pass
+
     try:
         await page.locator("button:has-text('Aceptar')").click(timeout=1500)
     except:
         pass
         
-    print(f"[{now_ts}] [W-{worker_id}] 📜 Escaneando panel izquierdo de Maps...")
+    print(f"[{now_ts}] [W-{worker_id}] Escaneando panel izquierdo (Scrolleo profundo 10x)...")
     try:
         feed = page.locator('div[role="feed"]')
-        await feed.wait_for(timeout=10000)
-        for _ in range(3): # Bajar un par de veces
+        for _ in range(10): # Scrolleo profundo para Hyper-Scanning
             await feed.hover()
             await page.mouse.wheel(0, 5000)
-            await asyncio.sleep(1.5)
-            print(f"[{now_ts}] [W-{worker_id}] ⏬ Haciendo Scroll inifinito (Vuelta {_ + 1}/3)...")
+            await asyncio.sleep(1.2)
     except Exception as e:
-        print(f"[{now_ts}] [W-{worker_id}] ⚠️ Advertencia: No hay mas negocios en esta vista satelital.")
+        pass
         
-    print(f"[{now_ts}] [W-{worker_id}] ✨ ¡Exito! Extrayendo metadata nativa de Maps UI...")
-    
     js_code = """() => {
         let items = [];
         let links = Array.from(document.querySelectorAll('a[href*="/maps/place/"]'));
@@ -140,12 +159,12 @@ async def extract_feed_data(page, lat, lng, worker_id):
         if url not in unique_businesses:
             unique_businesses[url] = item['text']
             
-    print(f"[{now_ts}] [W-{worker_id}] Evaluando Upserts de {len(unique_businesses)} locales crudos detectados...")
+    print(f"[{now_ts}] [W-{worker_id}] Locales detectados en esta pasada: {len(unique_businesses)}")
     
     # Process each roughly
     processed_count = 0
     for href, text_block in unique_businesses.items():
-        if processed_count >= 15: break # process up to 15 per cell to speed up
+        # processed_count >= 15: break # Eliminamos el limite para extraer absolutamente todo en cada celda H3
         
         place_id = extract_place_id_from_url(href)
         m = re.search(r'/place/([^/]+)/', href)
@@ -202,14 +221,14 @@ async def worker(worker_id):
             now_ts = datetime.datetime.now().strftime('%H:%M:%S')
             
             if not job:
-                print(f"[{now_ts}] [W-{worker_id}] 💤 No hay celdas pendientes. Durmiendo 10s...")
+                print(f"[{now_ts}] [W-{worker_id}] ZZZ No hay celdas pendientes. Durmiendo 10s...")
                 await asyncio.sleep(10)
                 continue
                 
             cell_id = job.get("id")
             lat, lng = job.get("lat"), job.get("lng")
             
-            print(f"\n\033[94m[{now_ts}] [W-{worker_id}] ================== COORDENADA H3: {cell_id} ==================\033[0m")
+            print(f"\n[{now_ts}] [W-{worker_id}] ================== COORDENADA H3: {cell_id} ==================")
             
             try:
                 await extract_feed_data(page, lat, lng, worker_id)
@@ -220,10 +239,10 @@ async def worker(worker_id):
                         "status": "completed"
                     })
                 await asyncio.to_thread(mark_completed)
-                print(f"[{now_ts}] [W-{worker_id}] ✅ Celda validada y completada. Moviendo a la siguiente...")
+                print(f"[{now_ts}] [W-{worker_id}] OK - Celda validada y completada. Moviendo a la siguiente...")
                 
             except Exception as e:
-                print(f"[{now_ts}] [W-{worker_id}] ❌ Error crítico: {e}")
+                print(f"[{now_ts}] [W-{worker_id}] ERROR: {e}")
                 def mark_failed():
                     db.collection(f"artifacts/marketspider-v3/global_job_queue").document(cell_id).update({
                         "status": "failed"
@@ -234,9 +253,9 @@ async def worker(worker_id):
 
 async def main():
     print("\n--------------------------------------------------------------")
-    print("🕸️ MARKET SPIDER GLOBAL v3 - Motor de Sincronización Espacial")
+    print("MARKET SPIDER GLOBAL v3 - Motor de Sincronizacion Espacial")
     print("--------------------------------------------------------------")
-    print("🚀 Levantando flota asincrónica. Precalentando 3 navegadores Playwright...\n")
+    print("Levantando flota asincronica. Precalentando 3 navegadores Playwright...\n")
     workers = [worker(i) for i in range(1, 4)]
     await asyncio.gather(*workers)
 
