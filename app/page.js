@@ -50,11 +50,12 @@ export default function MarketSpiderDashboard() {
   const [scans, setScans] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [crmLeads, setCrmLeads] = useState([]);
+  const [globalBusinesses, setGlobalBusinesses] = useState([]);
   const [userConfig, setUserConfig] = useState({ 
     categories: ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería / Barbería', 'Gimnasio', 'Bienes Raíces', 'Hostal Residencial', 'Hotel'], 
     locations: ['Valparaíso', 'Viña del Mar', 'Santiago'] 
   });
-  const [activeTab, setActiveTab] = useState('opportunities');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [triageFilter, setTriageFilter] = useState('sin_revisar');
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState(null);
@@ -72,6 +73,9 @@ export default function MarketSpiderDashboard() {
   const [filterLocation, setFilterLocation] = useState('');
   const [crmSearch, setCrmSearch] = useState('');
   const [localSearch, setLocalSearch] = useState('');
+
+  const [showAddLeadModal, setShowAddLeadModal] = useState(false);
+  const [newLeadData, setNewLeadData] = useState({ name: '', phone: '', website: '' });
 
   // 1. Auth
   useEffect(() => {
@@ -113,6 +117,30 @@ export default function MarketSpiderDashboard() {
     return () => unsub();
   }, [userId]);
 
+  // 4. Fetch Global Businesses
+  useEffect(() => {
+    if (!userId) return;
+    const q = query(collection(db, `artifacts/${APP_ID}/global_businesses`));
+    const unsub = onSnapshot(q, (snapshot) => {
+      setGlobalBusinesses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (err) => {
+      console.error("🔥 ERROR FIRESTORE GLOBAL BUSINESSES:", err);
+    });
+    return () => unsub();
+  }, [userId]);
+
+  // 5. Fetch CRM Leads
+  useEffect(() => {
+    if (!userId) return;
+    const q = query(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`));
+    const unsub = onSnapshot(q, (snapshot) => {
+      setCrmLeads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (err) => {
+      console.error("🔥 ERROR FIRESTORE CRM LEADS:", err);
+    });
+    return () => unsub();
+  }, [userId]);
+
   // Derivar Listado de Categorias y Ciudades
   const filterOptions = useMemo(() => {
     const map = new Map();
@@ -129,12 +157,13 @@ export default function MarketSpiderDashboard() {
     return Array.from(map.values());
   }, [scans]);
 
-  useEffect(() => {
-    if (filterOptions.length > 0 && (!filterCategory || !filterLocation)) {
-      setFilterCategory(filterOptions[0].category);
-      setFilterLocation(filterOptions[0].location);
-    }
-  }, [filterOptions, filterCategory, filterLocation]);
+  // Permitir vista global por defecto (sin filtro de ciudad/rubro)
+  // useEffect(() => {
+  //   if (filterOptions.length > 0 && (!filterCategory || !filterLocation)) {
+  //     setFilterCategory(filterOptions[0].category);
+  //     setFilterLocation(filterOptions[0].location);
+  //   }
+  // }, [filterOptions, filterCategory, filterLocation]);
 
   // Scans filtrados globalmente (para Tracking y Mapa y Oportunidades)
   const filteredScans = useMemo(() => {
@@ -149,7 +178,22 @@ export default function MarketSpiderDashboard() {
   }, [scans, filterCategory, filterLocation]);
 
   const latestScan = filteredScans[0];
-  const opportunities = latestScan?.places?.filter(p => true) || []; // Mostrar todos en oportunidades o filtrar
+  
+  // Triage: Lead Scoring System
+  const opportunities = useMemo(() => {
+    return globalBusinesses
+      .filter(b => b.status !== 'crm' && b.status !== 'discarded') // solo pendientes de revisar
+      .map(b => {
+        let score = 0;
+        if (!b.hasVideo) score += 30; // Gran oportunidad para vender audiovisual
+        if (!b.website || !b.url) score += 20; // Oportunidad para web
+        if (b.rating && b.rating < 4.0) score += 25; // Oportunidad de SEO/GMB
+        if (!b.claimed) score += 15; // Oportunidad de reclamo GMB
+        if (b.visualScore && b.visualScore < 50) score += 10; // Mejorar fotos
+        return { ...b, needScore: score };
+      })
+      .sort((a, b) => b.needScore - a.needScore);
+  }, [globalBusinesses]);
 
   // Tracking Histórico Segmentado
   const businessRankHistory = useMemo(() => {
@@ -198,19 +242,26 @@ export default function MarketSpiderDashboard() {
   };
 
   const handleSetStatus = async (place, newStatus) => {
-    if (!userId || !latestScan) return;
-    const scanRef = doc(db, `artifacts/${APP_ID}/users/${userId}/scans/`, latestScan.id);
-    const newPlaces = latestScan.places.map(p =>
-      p.name === place.name ? { ...p, reviewStatus: newStatus } : p
-    );
-    await updateDoc(scanRef, { places: newPlaces });
+    if (!userId) return;
+    
+    // Actualizar el estado en globalBusinesses
+    if (place.id) {
+       await updateDoc(doc(db, `artifacts/${APP_ID}/global_businesses`, place.id), { status: newStatus });
+    }
+
     // Si lo manda al CRM, también lo agrega como lead
     if (newStatus === 'crm') {
       const exists = crmLeads.find(lead => lead.name === place.name);
       if (!exists) {
         await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`), {
-          name: place.name, phone: place.phone || '', website: place.website || '',
-          rank: place.rank || 0, status: 'Prospecto', notes: '', updatedAt: serverTimestamp(),
+          name: place.name, 
+          phone: place.phone || '', 
+          website: place.url || place.website || '',
+          rank: place.rank || 0, 
+          status: 'Prospecto', 
+          notes: '', 
+          updatedAt: serverTimestamp(),
+          global_id: place.id || null
         });
       }
     }
@@ -280,6 +331,30 @@ export default function MarketSpiderDashboard() {
     }
   };
 
+  const handleAddManualLead = async (e) => {
+    e.preventDefault();
+    if (!userId || !newLeadData.name.trim()) return;
+    const exists = crmLeads.find(lead => lead.name.toLowerCase() === newLeadData.name.trim().toLowerCase());
+    if (exists) { alert("Ya existe un prospecto con ese nombre en tu CRM."); return; }
+    try {
+      await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`), {
+        name: newLeadData.name.trim(),
+        phone: newLeadData.phone.trim() || '',
+        website: newLeadData.website.trim() || '',
+        rank: 0,
+        status: 'Prospecto',
+        notes: 'Agregado manualmente.',
+        updatedAt: serverTimestamp(),
+      });
+      setShowAddLeadModal(false);
+      setNewLeadData({ name: '', phone: '', website: '' });
+      alert(`¡${newLeadData.name.trim()} agregado al CRM!`);
+    } catch(err) {
+      console.error("Error to CRM", err);
+      alert("Error al agregar al CRM.");
+    }
+  };
+
   const handleUpdateCRMStatus = async (leadId, newStatus) => {
     await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { status: newStatus, updatedAt: serverTimestamp() });
   };
@@ -298,28 +373,25 @@ export default function MarketSpiderDashboard() {
     await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { gaps: newGaps, updatedAt: serverTimestamp() });
   };
 
-  const handleScanGaps = async (lead) => {
+  const handleDeepScan = async (lead) => {
+    if (!lead.website || !lead.website.startsWith('http')) {
+      alert("El prospecto no tiene un sitio web válido configurado (debe empezar con http:// o https://).");
+      return;
+    }
     setScanningGapFor(lead.id);
     try {
-      const res = await fetch('/api/scan-gaps', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ website: lead.website, rating: lead.rank, phone: lead.phone }),
+      await addDoc(collection(db, `artifacts/${APP_ID}/deep_scan_queue`), {
+        leadId: lead.id,
+        userId: userId,
+        url: lead.website,
+        status: 'pending',
+        createdAt: serverTimestamp(),
       });
-      const data = await res.json();
-      if (res.ok && data.detected_gaps) {
-        // Merge: conservar los gaps manuales que el auto no puede detectar
-        const manualOnly = ['no_reclamada', 'sin_menu', 'sin_respuesta', 'fotos_viejas'];
-        const currentManual = (lead.gaps || []).filter(g => manualOnly.includes(g));
-        const merged = [...new Set([...currentManual, ...data.detected_gaps])];
-        await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, lead.id), {
-          gaps: merged, updatedAt: serverTimestamp()
-        });
-      }
+      alert("Enviado al Deep Spider 🕸️. Los datos aparecerán pronto en esta ficha.");
     } catch (err) {
-      console.error('Error escaneando gaps:', err);
+      console.error('Error enviando a cola deep scan:', err);
     } finally {
-      setScanningGapFor(null);
+      setTimeout(() => setScanningGapFor(null), 2000); // mostrar spinner 2 seg
     }
   };
 
@@ -401,6 +473,7 @@ export default function MarketSpiderDashboard() {
   };
 
   const tabs = [
+    { id: 'dashboard', label: 'Dashboard', color: 'emerald' },
     { id: 'opportunities', label: 'Locales', color: 'indigo' },
     { id: 'crm', label: 'Seguimiento', color: 'amber' },
     { id: 'tracking', label: 'Tracking', color: 'cyan' },
@@ -438,6 +511,7 @@ export default function MarketSpiderDashboard() {
             <p className="text-slate-400 text-sm flex items-center gap-2">Google Maps Directory & Ranking suite</p>
             <Link href="/directorio" className="text-xs bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 font-bold px-3 py-1.5 rounded-full border border-emerald-500/30 transition-colors shadow-sm shadow-emerald-500/10 flex items-center gap-2">🗃️ Ver Directorio Consolidado</Link>
             <Link href="/global" className="text-xs bg-fuchsia-500/10 hover:bg-fuchsia-500/20 text-fuchsia-400 font-bold px-3 py-1.5 rounded-full border border-fuchsia-500/30 transition-colors shadow-sm shadow-fuchsia-500/10 flex items-center gap-2">🌐 Rastreador GLOBAL 24/7</Link>
+            <Link href="/cotizador" className="text-xs bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 font-bold px-3 py-1.5 rounded-full border border-indigo-500/30 transition-colors shadow-sm shadow-indigo-500/10 flex items-center gap-2"><FileText size={14}/> CotizaPro Generator</Link>
           </div>
         </div>
         <nav className="mt-4 md:mt-0 flex flex-wrap gap-2">
@@ -479,31 +553,69 @@ export default function MarketSpiderDashboard() {
 
       <main className="max-w-7xl mx-auto">
 
+        {/* ======================== TAB: DASHBOARD ======================== */}
+        {activeTab === 'dashboard' && (
+          <div className="animate-in fade-in duration-500 space-y-6">
+            <div className="flex items-center gap-3 mb-4">
+              <Activity className="text-emerald-400" size={28} />
+              <h2 className="text-2xl font-bold text-white">Resumen Global</h2>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 p-4 opacity-10 text-emerald-500 group-hover:scale-110 transition-transform"><Globe size={64}/></div>
+                <p className="text-slate-400 font-semibold mb-1 relative z-10 text-sm uppercase tracking-wider">Total Extraídos</p>
+                <h3 className="text-4xl font-black text-white relative z-10">{globalBusinesses.length}</h3>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 p-4 opacity-10 text-indigo-500 group-hover:scale-110 transition-transform"><Star size={64}/></div>
+                <p className="text-slate-400 font-semibold mb-1 relative z-10 text-sm uppercase tracking-wider">Pendientes Revisión</p>
+                <h3 className="text-4xl font-black text-indigo-400 relative z-10">
+                  {globalBusinesses.filter(b => b.status !== 'crm' && b.status !== 'discarded').length}
+                </h3>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 p-4 opacity-10 text-amber-500 group-hover:scale-110 transition-transform"><Target size={64}/></div>
+                <p className="text-slate-400 font-semibold mb-1 relative z-10 text-sm uppercase tracking-wider">En Embudo CRM</p>
+                <h3 className="text-4xl font-black text-amber-400 relative z-10">{crmLeads.length}</h3>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 p-4 opacity-10 text-emerald-500 group-hover:scale-110 transition-transform"><CheckSquare size={64}/></div>
+                <p className="text-slate-400 font-semibold mb-1 relative z-10 text-sm uppercase tracking-wider">Ventas Ganadas</p>
+                <h3 className="text-4xl font-black text-emerald-400 relative z-10">
+                  {crmLeads.filter(l => l.status === 'Ganado').length}
+                </h3>
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+              <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2"><Sparkles className="text-indigo-400"/> Sugerencia de Prospección</h3>
+              <p className="text-slate-400 text-sm">
+                Tienes <strong className="text-indigo-400">{globalBusinesses.filter(b => b.status !== 'crm' && b.status !== 'discarded').length} locales</strong> esperando triage. 
+                Ve a la pestaña <strong>Locales</strong> para evaluar los leads ordenados automáticamente por nivel de necesidad (Need Score).
+              </p>
+              <button 
+                onClick={() => setActiveTab('opportunities')}
+                className="mt-4 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg font-bold transition-colors"
+              >
+                Comenzar Triage
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* ======================== TAB: OPORTUNIDADES ======================== */}
         {activeTab === 'opportunities' && (() => {
-          const STATUS_CONFIG = {
-            sin_revisar: { label: 'Sin Revisar', dot: 'bg-slate-500', card: 'border-slate-700', badge: 'bg-slate-700/50 text-slate-300 border-slate-600' },
-            evaluando:   { label: 'En Evaluación', dot: 'bg-amber-400', card: 'border-amber-500/40', badge: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
-            crm:         { label: 'En CRM', dot: 'bg-emerald-400', card: 'border-emerald-500/40', badge: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
-            poco_valor:  { label: 'Poco Valor', dot: 'bg-rose-400', card: 'border-rose-500/30', badge: 'bg-rose-500/10 text-rose-400 border-rose-500/30' },
-            cerrado:     { label: 'Cerrado', dot: 'bg-slate-700', card: 'border-slate-800', badge: 'bg-slate-900 text-slate-500 border-slate-700' },
-          };
-          const counts = {};
-          Object.keys(STATUS_CONFIG).forEach(k => counts[k] = 0);
-          opportunities.forEach(p => { const s = p.reviewStatus || 'sin_revisar'; counts[s] = (counts[s] || 0) + 1; });
-          const filteredByTriage = triageFilter === 'todos'
-            ? opportunities
-            : opportunities.filter(p => (p.reviewStatus || 'sin_revisar') === triageFilter);
           const visiblePlaces = localSearch
-            ? filteredByTriage.filter(p => p.name?.toLowerCase().includes(localSearch.toLowerCase()))
-            : filteredByTriage;
+            ? opportunities.filter(p => p.name?.toLowerCase().includes(localSearch.toLowerCase()))
+            : opportunities;
 
           return (
           <div className="animate-in fade-in duration-500">
             {/* Header + Contadores */}
             <div className="flex flex-wrap items-center gap-3 mb-6">
               <h2 className="text-2xl font-bold flex items-center gap-2">
-                <Star className="text-amber-400" /> Locales
+                <Star className="text-amber-400" /> Triage de Locales
               </h2>
               {/* Buscador por nombre */}
               <div className="relative">
@@ -516,19 +628,8 @@ export default function MarketSpiderDashboard() {
                   className="bg-slate-900 border border-slate-700 text-white pl-8 pr-3 py-1.5 rounded-full text-xs focus:border-amber-500 focus:outline-none transition-colors w-40"
                 />
               </div>
-              <div className="ml-auto flex flex-wrap gap-2">
-                {[['todos', '🗂️ Todos', opportunities.length], ...Object.entries(STATUS_CONFIG).map(([k,v]) => [k, v.label, counts[k]])].map(([key, label, count]) => (
-                  <button key={key} onClick={() => setTriageFilter(key)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-bold transition-all ${
-                      triageFilter === key
-                        ? 'bg-indigo-500 text-white border-indigo-400 shadow-lg shadow-indigo-500/20'
-                        : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-500'
-                    }`}
-                  >
-                    {key !== 'todos' && <span className={`w-2 h-2 rounded-full ${STATUS_CONFIG[key]?.dot}`}></span>}
-                    {label} <span className="opacity-70">({count})</span>
-                  </button>
-                ))}
+              <div className="ml-auto text-sm text-slate-400 font-medium bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg">
+                Mostrando <strong className="text-indigo-400">{visiblePlaces.length}</strong> prospectos ordenados por <span className="text-amber-400">Nivel de Necesidad (Score)</span>
               </div>
             </div>
 
@@ -540,30 +641,34 @@ export default function MarketSpiderDashboard() {
             ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {visiblePlaces.map((place, idx) => {
-                const status = place.reviewStatus || 'sin_revisar';
-                const sc = STATUS_CONFIG[status];
+                const score = place.needScore || 0;
+                let scoreColor = 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10';
+                if (score >= 20) scoreColor = 'text-amber-400 border-amber-500/30 bg-amber-500/10';
+                if (score >= 40) scoreColor = 'text-rose-400 border-rose-500/30 bg-rose-500/10';
+                
                 return (
-                <div key={idx} className={`group relative bg-slate-900 border ${sc.card} rounded-2xl p-6 transition-all flex flex-col justify-between ${status === 'cerrado' ? 'opacity-50' : ''}`}>
+                <div key={idx} className={`group relative bg-slate-900 border border-slate-700 rounded-2xl p-6 transition-all flex flex-col justify-between`}>
 
-                  {/* Badge de Estado top-left */}
-                  <span className={`absolute top-4 left-4 text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border flex items-center gap-1.5 ${sc.badge}`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`}></span>
-                    {sc.label}
+                  {/* Badge de Need Score top-left */}
+                  <span className={`absolute top-4 left-4 text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border flex items-center gap-1.5 ${scoreColor}`}>
+                    Need Score: {score}
                   </span>
 
-                  {/* Boton Borrar (solo en cerrados o siempre) */}
-                  <button onClick={() => handleDeletePlace(latestScan.id, place.name)}
+                  {/* Boton Borrar */}
+                  <button onClick={() => handleSetStatus(place, 'discarded')}
                     className="absolute top-4 right-4 bg-slate-950/50 hover:bg-rose-500/20 text-slate-600 hover:text-rose-400 p-1.5 rounded-lg transition-colors border border-transparent hover:border-rose-500/30"
-                    title="Eliminar de la base de datos"
+                    title="Descartar local"
                   >
                     <Trash2 size={14} />
                   </button>
 
                   <div className="mt-7">
                     <h3 className="font-bold text-lg text-white mb-2 pr-2">{place.name}</h3>
-                    <div className="flex items-center text-xs text-slate-400 gap-3 mb-4">
+                    <div className="flex items-center text-xs text-slate-400 gap-3 mb-4 flex-wrap">
                       <span className="flex items-center gap-1"><Star size={12} className="text-amber-400" /> {place.rating} ({place.reviews})</span>
                       <span className="flex items-center gap-1 font-bold text-indigo-400">Rank #{place.rank}</span>
+                      {place.hasVideo === false && <span className="flex items-center gap-1 text-rose-300"><Video size={12}/> Sin Video</span>}
+                      {place.claimed === false && <span className="flex items-center gap-1 text-orange-300"><AlertCircle size={12}/> Ficha Abandonada</span>}
                     </div>
 
                     <div className="space-y-3 mb-5 bg-slate-950 p-4 rounded-xl border border-white/5 text-sm">
@@ -573,11 +678,11 @@ export default function MarketSpiderDashboard() {
                       </div>
                       <div className="flex items-center gap-3">
                         <Globe size={14} className="text-slate-500 shrink-0" />
-                        {place.website ? <a href={place.website} target="_blank" className="text-indigo-400 hover:underline truncate">{place.website.replace('https://', '').replace('http://', '')}</a> : <span className="text-slate-600">No listada</span>}
+                        {(place.website || place.url) ? <a href={place.website || place.url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline truncate">Visitar Web</a> : <span className="text-slate-600">No listada</span>}
                       </div>
                       <div className="flex items-center gap-3">
                         <MapIcon size={14} className="text-slate-500 shrink-0" />
-                        <a href={place.gmapsLink || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name + ' ' + (latestScan?.location || ''))}`}
+                        <a href={place.gmapsLink || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name + ' ' + (place.location || ''))}`}
                           target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline truncate">
                           Ver en Google Maps
                         </a>
@@ -587,23 +692,14 @@ export default function MarketSpiderDashboard() {
 
                   {/* Botonera de Triaje Rápido */}
                   <div className="pt-3 border-t border-slate-800 space-y-2">
-                    <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-2">Clasificar como:</p>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button onClick={() => handleSetStatus(place, 'evaluando')}
-                        className={`text-xs py-1.5 px-2 rounded-lg border transition-all font-medium ${ status === 'evaluando' ? 'bg-amber-500/20 text-amber-400 border-amber-500/40' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-amber-500/40 hover:text-amber-400' }`}>
-                        🟡 Evaluando
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => handleSetStatus(place, 'discarded')}
+                        className={`text-xs py-2 px-2 rounded-lg border transition-all font-bold bg-slate-800 text-slate-400 border-slate-700 hover:border-rose-500/40 hover:text-rose-400 hover:bg-rose-500/10`}>
+                        ❌ Descartar
                       </button>
                       <button onClick={() => handleSetStatus(place, 'crm')}
-                        className={`text-xs py-1.5 px-2 rounded-lg border transition-all font-medium ${ status === 'crm' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-emerald-500/40 hover:text-emerald-400' }`}>
-                        🟢 → CRM
-                      </button>
-                      <button onClick={() => handleSetStatus(place, 'poco_valor')}
-                        className={`text-xs py-1.5 px-2 rounded-lg border transition-all font-medium ${ status === 'poco_valor' ? 'bg-rose-500/20 text-rose-400 border-rose-500/40' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-rose-500/40 hover:text-rose-400' }`}>
-                        🔴 Poco Valor
-                      </button>
-                      <button onClick={() => handleSetStatus(place, 'cerrado')}
-                        className={`text-xs py-1.5 px-2 rounded-lg border transition-all font-medium ${ status === 'cerrado' ? 'bg-slate-700 text-slate-300 border-slate-600' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-500 hover:text-slate-300' }`}>
-                        ⚫ Cerrado
+                        className={`text-xs py-2 px-2 rounded-lg border transition-all font-bold bg-emerald-600/20 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500 hover:text-white`}>
+                        ✅ Pasar al CRM
                       </button>
                     </div>
                     <button onClick={() => handleCopyPitch(place)} className="w-full flex items-center justify-center gap-2 text-xs bg-white/5 hover:bg-white/10 text-slate-300 py-1.5 px-3 rounded-lg transition-colors border border-white/10">
@@ -627,7 +723,13 @@ export default function MarketSpiderDashboard() {
                   {crmLeads.length} Prospectos
                 </span>
               </h2>
-              <div className="ml-auto flex items-center gap-4">
+              <div className="ml-auto flex flex-wrap items-center gap-4">
+                <button
+                  onClick={() => setShowAddLeadModal(true)}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-emerald-600/20"
+                >
+                  <PlusCircle size={14} /> Añadir Manual
+                </button>
                 {crmSearch && (
                   <span className="text-xs text-indigo-400 font-bold animate-pulse">
                     {crmLeads.filter(l => l.name?.toLowerCase().includes(crmSearch.toLowerCase())).length} resultados
@@ -700,20 +802,37 @@ export default function MarketSpiderDashboard() {
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span> Brechas Detectadas
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span> Datos / Brechas
                               </p>
                               <button
-                                onClick={() => handleScanGaps(lead)}
+                                onClick={() => handleDeepScan(lead)}
                                 disabled={scanningGapFor === lead.id}
-                                className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-md border bg-slate-900 border-slate-700 text-slate-400 hover:border-indigo-500/50 hover:text-indigo-400 transition-all disabled:opacity-50"
-                                title="Auto-detectar brechas desde datos y web del local"
+                                className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-md border bg-indigo-900/50 border-indigo-700 text-indigo-300 hover:border-indigo-500 hover:bg-indigo-600/20 hover:text-indigo-200 transition-all disabled:opacity-50 shadow-sm"
+                                title="Extraer Emails y RRSS automáticamente del sitio web"
                               >
                                 {scanningGapFor === lead.id
                                   ? <><Loader2 size={10} className="animate-spin" /> Escaneando...</>
-                                  : <><RefreshCw size={10} /> Re-escanear</>
+                                  : <><RefreshCw size={10} /> Deep Spider (Web)</>
                                 }
                               </button>
                             </div>
+                            
+                            {/* Deep Spider Results */}
+                            {lead.deepScrape && (
+                              <div className="bg-slate-950 p-2 rounded-lg border border-indigo-500/30 text-xs mb-2 space-y-1 text-slate-300">
+                                <p className="text-[10px] font-bold text-indigo-400 mb-1">Resultados Deep Spider:</p>
+                                {lead.deepScrape.emails?.length > 0 && (
+                                  <p className="truncate"><strong className="text-white">✉️ Emails:</strong> {lead.deepScrape.emails.join(', ')}</p>
+                                )}
+                                {lead.deepScrape.socials?.length > 0 && (
+                                  <p className="truncate"><strong className="text-white">📱 RRSS:</strong> {lead.deepScrape.socials.join(', ')}</p>
+                                )}
+                                {lead.deepScrape.video_count !== undefined && (
+                                  <p><strong className="text-white">🎥 Videos en web:</strong> {lead.deepScrape.video_count}</p>
+                                )}
+                              </div>
+                            )}
+
                             <div className="flex flex-wrap gap-1.5">
                               {OPPORTUNITY_GAPS.map(gap => {
                                 const active = (lead.gaps || []).includes(gap.id);
@@ -734,9 +853,6 @@ export default function MarketSpiderDashboard() {
                                 );
                               })}
                             </div>
-                            {(lead.gaps || []).length === 0 && (
-                              <p className="text-[10px] text-slate-600 italic">Toca los iconos para marcar las brechas del local.</p>
-                            )}
                           </div>
 
                           {/* --- DATOS DEL CAMPO (manuales) --- */}
@@ -1040,6 +1156,71 @@ export default function MarketSpiderDashboard() {
         )}
 
       </main>
+
+      {/* MODAL: Agregar Lead Manual */}
+      {showAddLeadModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl p-6 relative">
+            <button
+              onClick={() => setShowAddLeadModal(false)}
+              className="absolute top-4 right-4 text-slate-500 hover:text-white"
+            >
+              <XCircle size={24} />
+            </button>
+            <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+              <PlusCircle className="text-emerald-400" /> Nuevo Prospecto Manual
+            </h3>
+            <form onSubmit={handleAddManualLead} className="space-y-4">
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">Nombre del Negocio *</label>
+                <input
+                  type="text"
+                  required
+                  value={newLeadData.name}
+                  onChange={e => setNewLeadData({ ...newLeadData, name: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:border-emerald-500 outline-none"
+                  placeholder="Ej. Pizzería Roma"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">Teléfono</label>
+                <input
+                  type="text"
+                  value={newLeadData.phone}
+                  onChange={e => setNewLeadData({ ...newLeadData, phone: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:border-emerald-500 outline-none"
+                  placeholder="Ej. +56912345678"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">Sitio Web / Link</label>
+                <input
+                  type="url"
+                  value={newLeadData.website}
+                  onChange={e => setNewLeadData({ ...newLeadData, website: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:border-emerald-500 outline-none"
+                  placeholder="Ej. https://mi-web.com"
+                />
+              </div>
+              <div className="pt-4 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowAddLeadModal(false)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-white py-2 rounded-xl transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-xl transition-colors shadow-lg shadow-emerald-600/20"
+                >
+                  Guardar en CRM
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
