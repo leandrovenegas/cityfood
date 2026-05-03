@@ -1110,12 +1110,13 @@ export default function MarketSpiderDashboard() {
                           </div>
                         </div>
                       </div>
-                    );
+                    )
                   })()}
                 </div>
               </div>
             )}
-            )}
+          </div>
+        )}
 
             {/* SECCION: NUEVO RASTREO */}
             {configTab === 'new-scan' && (
