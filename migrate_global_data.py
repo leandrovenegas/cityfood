@@ -1,8 +1,9 @@
+import sys
 import firebase_admin
 from firebase_admin import credentials, firestore
-import datetime
 
-# Firebase Setup
+print("INICIANDO MIGRACION DE DATOS: Calculando Need Scores...")
+
 try:
     cred = credentials.Certificate("serviceAccountKey.json")
     firebase_admin.initialize_app(cred)
@@ -11,49 +12,48 @@ except ValueError:
 
 db = firestore.client()
 
-def migrate():
-    print("Iniciando migración de negocios globales...")
+def run_migration():
     businesses_ref = db.collection("artifacts/marketspider-v3/global_businesses")
     docs = businesses_ref.stream()
     
-    unique_categories = set()
-    batch = db.batch()
-    batch_count = 0
-    total_processed = 0
+    count = 0
+    updated = 0
     
     for doc in docs:
+        count += 1
         data = doc.to_dict()
-        doc_ref = businesses_ref.document(doc.id)
         
-        # Recolectar categoría
-        cat = data.get("category", "")
-        if cat and isinstance(cat, str):
-            unique_categories.add(cat.strip())
+        # Omitir los que ya estan en CRM o descartados
+        if data.get("status") in ["crm", "discarded"]:
+            continue
             
-        # Añadir name_lower si no existe o actualizar
-        name = data.get("name", "")
-        name_lower = name.lower() if name else ""
+        # Calcular Need Score
+        need_score = 0
         
-        batch.update(doc_ref, {"name_lower": name_lower})
-        batch_count += 1
-        total_processed += 1
+        rating = data.get("rating", 0)
+        if rating > 0 and rating < 4.0: need_score += 25
         
-        if batch_count >= 400:
-            batch.commit()
-            print(f"Commit batch de 400. Total procesados: {total_processed}")
-            batch = db.batch()
-            batch_count = 0
-            
-    if batch_count > 0:
-        batch.commit()
-        print(f"Commit final. Total procesados: {total_processed}")
+        # Asignar puntajes extra por cosas que todavia no sabemos o si sabemos que fallan
+        if data.get("hasVideo") is False: need_score += 30
+        elif "hasVideo" not in data: need_score += 30 # default
         
-    print(f"Total categorías únicas encontradas: {len(unique_categories)}")
-    
-    # Guardar categorías
-    meta_ref = db.collection("artifacts/marketspider-v3/meta").document("categories")
-    meta_ref.set({"list": sorted(list(unique_categories)), "updated_at": datetime.datetime.now()})
-    print("Categorías guardadas en artifacts/marketspider-v3/meta/categories")
-    
+        if not data.get("website") and not data.get("url"): need_score += 20
+        elif "website" not in data and "url" not in data: need_score += 20 # default
+        
+        if data.get("claimed") is False: need_score += 15
+        elif "claimed" not in data: need_score += 15 # default
+        
+        # Actualizar en Firebase
+        doc.reference.update({
+            "status": "pending",
+            "needScore": need_score
+        })
+        
+        updated += 1
+        if updated % 100 == 0:
+            print(f"Progreso: {updated} locales actualizados...")
+
+    print(f"\n✅ MIGRACIÓN COMPLETADA. Se escanearon {count} locales y se actualizaron {updated}.")
+
 if __name__ == "__main__":
-    migrate()
+    run_migration()

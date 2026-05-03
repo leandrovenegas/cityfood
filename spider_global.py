@@ -195,6 +195,15 @@ async def extract_feed_data(page, lat, lng, worker_id):
                     if cat_candidate and len(cat_candidate) > 2 and '¢' not in cat_candidate and '$' not in cat_candidate:
                         category = cat_candidate
 
+        # Calcular Need Score Base
+        need_score = 0
+        if rating > 0 and rating < 4.0: need_score += 25
+        # we will add +30 (no video) +20 (no web) +15 (no reclamada) later if we can detect it, 
+        # but for now we give them by default to be refined by deep spider
+        need_score += 30 # default no video assumption
+        need_score += 20 # default no web assumption
+        need_score += 15 # default no reclamada assumption
+
         await asyncio.to_thread(upsert_business, {
             "name": name,
             "name_lower": name.lower() if name else "",
@@ -204,6 +213,8 @@ async def extract_feed_data(page, lat, lng, worker_id):
             "rating": rating,
             "reviews": reviews,
             "category": category,
+            "status": "pending",
+            "needScore": need_score,
             "last_seen": datetime.datetime.now(datetime.timezone.utc)
         }, place_id)
         processed_count += 1

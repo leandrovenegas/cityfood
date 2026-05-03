@@ -5,7 +5,7 @@ import nextDynamic from 'next/dynamic';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle, Play, Clock, CheckCircle, XCircle, PlusCircle, RefreshCw, Trash2, Phone, Globe, Map as MapIcon, FileText, Target, DollarSign, CheckSquare, XSquare, Sparkles } from 'lucide-react';
 import { db, auth, signInAnonymously } from './firebase';
-import { collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, setDoc, limit, startAfter, getDocs, getCountFromServer, where } from "firebase/firestore";
 export const dynamic = 'force-dynamic';
 const MapComponent = nextDynamic(() => import('./components/MapComponent'), { ssr: false });
 
@@ -13,6 +13,7 @@ const APP_ID = "marketspider-v3";
 
 const JOB_STATUS_CONFIG = {
   pending: { label: "En cola", className: "bg-amber-500/10 text-amber-400 border-amber-500/30", icon: Clock },
+  paused: { label: "Pausado (Cerrojo)", className: "bg-slate-500/10 text-slate-400 border-slate-500/30", icon: XCircle },
   running: { label: "Corriendo", className: "bg-blue-500/10 text-blue-400 border-blue-500/30", icon: RefreshCw },
   scheduled: { label: "Programado", className: "bg-indigo-500/10 text-indigo-400 border-indigo-500/30", icon: Clock },
   done: { label: "Completado", className: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30", icon: CheckCircle },
@@ -51,11 +52,16 @@ export default function MarketSpiderDashboard() {
   const [jobs, setJobs] = useState([]);
   const [crmLeads, setCrmLeads] = useState([]);
   const [globalBusinesses, setGlobalBusinesses] = useState([]);
+  const [totalGlobalBusinesses, setTotalGlobalBusinesses] = useState(0);
+  const [totalPending, setTotalPending] = useState(0);
+  const [lastVisible, setLastVisible] = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [userConfig, setUserConfig] = useState({ 
     categories: ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería / Barbería', 'Gimnasio', 'Bienes Raíces', 'Hostal Residencial', 'Hotel'], 
     locations: ['Valparaíso', 'Viña del Mar', 'Santiago'] 
   });
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [configTab, setConfigTab] = useState('jobs');
   const [triageFilter, setTriageFilter] = useState('sin_revisar');
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState(null);
@@ -117,17 +123,66 @@ export default function MarketSpiderDashboard() {
     return () => unsub();
   }, [userId]);
 
-  // 4. Fetch Global Businesses
+  // 4. Fetch Global Businesses & Stats
   useEffect(() => {
     if (!userId) return;
-    const q = query(collection(db, `artifacts/${APP_ID}/global_businesses`));
+
+    // A. Contadores estáticos (muy baratos en lecturas)
+    const fetchCounts = async () => {
+      try {
+        const collRef = collection(db, `artifacts/${APP_ID}/global_businesses`);
+        const snapshotGlobal = await getCountFromServer(collRef);
+        setTotalGlobalBusinesses(snapshotGlobal.data().count);
+        
+        const qPending = query(collRef, where("status", "==", "pending"));
+        const snapshotPending = await getCountFromServer(qPending);
+        setTotalPending(snapshotPending.data().count);
+      } catch (e) {
+        console.error("Error fetching counts", e);
+      }
+    };
+    fetchCounts();
+
+    // B. Obtener los primeros 30 locales pendientes para Triage (Paginado)
+    const q = query(
+      collection(db, `artifacts/${APP_ID}/global_businesses`),
+      where("status", "==", "pending"),
+      orderBy("needScore", "desc"),
+      limit(30)
+    );
     const unsub = onSnapshot(q, (snapshot) => {
       setGlobalBusinesses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setLastVisible(snapshot.docs[snapshot.docs.length - 1]);
     }, (err) => {
       console.error("🔥 ERROR FIRESTORE GLOBAL BUSINESSES:", err);
     });
     return () => unsub();
   }, [userId]);
+
+  const handleLoadMore = async () => {
+    if (!lastVisible) return;
+    setLoadingMore(true);
+    try {
+      const q = query(
+        collection(db, `artifacts/${APP_ID}/global_businesses`),
+        where("status", "==", "pending"),
+        orderBy("needScore", "desc"),
+        startAfter(lastVisible),
+        limit(30)
+      );
+      const snapshot = await getDocs(q);
+      if (!snapshot.empty) {
+        setGlobalBusinesses(prev => [...prev, ...snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))]);
+        setLastVisible(snapshot.docs[snapshot.docs.length - 1]);
+      } else {
+        setLastVisible(null); // no hay mas
+      }
+    } catch (e) {
+      console.error("Error cargando más:", e);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   // 5. Fetch CRM Leads
   useEffect(() => {
@@ -179,21 +234,8 @@ export default function MarketSpiderDashboard() {
 
   const latestScan = filteredScans[0];
   
-  // Triage: Lead Scoring System
-  const opportunities = useMemo(() => {
-    return globalBusinesses
-      .filter(b => b.status !== 'crm' && b.status !== 'discarded') // solo pendientes de revisar
-      .map(b => {
-        let score = 0;
-        if (!b.hasVideo) score += 30; // Gran oportunidad para vender audiovisual
-        if (!b.website || !b.url) score += 20; // Oportunidad para web
-        if (b.rating && b.rating < 4.0) score += 25; // Oportunidad de SEO/GMB
-        if (!b.claimed) score += 15; // Oportunidad de reclamo GMB
-        if (b.visualScore && b.visualScore < 50) score += 10; // Mejorar fotos
-        return { ...b, needScore: score };
-      })
-      .sort((a, b) => b.needScore - a.needScore);
-  }, [globalBusinesses]);
+  // Triage: Los prospectos ya vienen filtrados por 'pending' y ordenados por 'needScore' desde Firestore
+  const opportunities = globalBusinesses;
 
   // Tracking Histórico Segmentado
   const businessRankHistory = useMemo(() => {
@@ -400,6 +442,16 @@ export default function MarketSpiderDashboard() {
     await deleteDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId));
   };
 
+  const handleToggleJobStatus = async (jobId, currentStatus) => {
+    try {
+      const newStatus = (currentStatus === 'pending' || currentStatus === 'scheduled') ? 'paused' : 'pending';
+      await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/scan_jobs/`, jobId), { status: newStatus });
+    } catch (e) {
+      console.error("Error al pausar/reanudar el trabajo:", e);
+      alert("Error al cambiar el estado del trabajo.");
+    }
+  };
+
   const handleGenerateProposal = async (lead) => {
     if (!userId) return;
     setGeneratingProposalFor(lead.id);
@@ -476,9 +528,7 @@ export default function MarketSpiderDashboard() {
     { id: 'dashboard', label: 'Dashboard', color: 'emerald' },
     { id: 'opportunities', label: 'Locales', color: 'indigo' },
     { id: 'crm', label: 'Seguimiento', color: 'amber' },
-    { id: 'tracking', label: 'Tracking', color: 'cyan' },
-    { id: 'new-scan', label: 'Rastreo', color: 'violet' },
-    { id: 'history', label: 'Historial', color: 'slate' },
+    { id: 'config', label: 'Configuración', color: 'slate' },
   ];
 
   if (loading) return (
@@ -565,13 +615,13 @@ export default function MarketSpiderDashboard() {
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-4 opacity-10 text-emerald-500 group-hover:scale-110 transition-transform"><Globe size={64}/></div>
                 <p className="text-slate-400 font-semibold mb-1 relative z-10 text-sm uppercase tracking-wider">Total Extraídos</p>
-                <h3 className="text-4xl font-black text-white relative z-10">{globalBusinesses.length}</h3>
+                <h3 className="text-4xl font-black text-white relative z-10">{totalGlobalBusinesses}</h3>
               </div>
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-4 opacity-10 text-indigo-500 group-hover:scale-110 transition-transform"><Star size={64}/></div>
                 <p className="text-slate-400 font-semibold mb-1 relative z-10 text-sm uppercase tracking-wider">Pendientes Revisión</p>
                 <h3 className="text-4xl font-black text-indigo-400 relative z-10">
-                  {globalBusinesses.filter(b => b.status !== 'crm' && b.status !== 'discarded').length}
+                  {totalPending}
                 </h3>
               </div>
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 relative overflow-hidden group">
@@ -709,6 +759,20 @@ export default function MarketSpiderDashboard() {
                 </div>);
               })}
             </div>
+            )}
+
+            {/* Pagination Button */}
+            {lastVisible && !localSearch && (
+              <div className="mt-8 flex justify-center">
+                <button 
+                  onClick={handleLoadMore} 
+                  disabled={loadingMore}
+                  className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-2 rounded-full font-bold transition-all border border-slate-700 flex items-center gap-2"
+                >
+                  {loadingMore ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                  {loadingMore ? 'Cargando...' : 'Cargar Más Prospectos'}
+                </button>
+              </div>
             )}
           </div>);
         })()}
@@ -955,9 +1019,20 @@ export default function MarketSpiderDashboard() {
           </div>
         )}
 
-        {/* ======================== TAB: TRACKING ======================== */}
-        {activeTab === 'tracking' && (
+        {/* ======================== TAB: CONFIGURACION ======================== */}
+        {activeTab === 'config' && (
           <div className="animate-in fade-in duration-500">
+            {/* Sub-Navegación de Configuración */}
+            <div className="flex flex-wrap gap-4 border-b border-slate-800 pb-4 mb-6">
+              <button onClick={() => setConfigTab('jobs')} className={`pb-2 border-b-2 font-bold transition-all ${configTab === 'jobs' ? 'border-violet-500 text-violet-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>Trabajos de Araña</button>
+              <button onClick={() => setConfigTab('new-scan')} className={`pb-2 border-b-2 font-bold transition-all ${configTab === 'new-scan' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>Nuevo Rastreo</button>
+              <button onClick={() => setConfigTab('tracking')} className={`pb-2 border-b-2 font-bold transition-all ${configTab === 'tracking' ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>Tracking Global</button>
+              <button onClick={() => setConfigTab('history')} className={`pb-2 border-b-2 font-bold transition-all ${configTab === 'history' ? 'border-slate-400 text-slate-200' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>Historial</button>
+            </div>
+
+            {/* SECCION: TRACKING */}
+            {configTab === 'tracking' && (
+              <div className="animate-in fade-in duration-500">
             {businessList.length === 0 ? (
               <div className="py-16 text-center text-slate-500">
                 Aún no hay scans agrupados para este rubro.
@@ -1040,29 +1115,12 @@ export default function MarketSpiderDashboard() {
                 </div>
               </div>
             )}
-          </div>
-        )}
-
-        {/* ======================== TAB: MAPA ======================== */}
-        {activeTab === 'map' && (
-          <div className="animate-in fade-in duration-500">
-            <h2 className="text-2xl font-bold flex items-center gap-2 mb-6">
-              <MapIcon className="text-emerald-400" /> Mapa de Oportunidades
-            </h2>
-            {latestScan ? (
-              <MapComponent places={latestScan.places || []} />
-            ) : (
-              <div className="p-12 text-center bg-slate-900 rounded-2xl border border-slate-800 text-slate-500">
-                No hay datos geográficos para graficar.
-              </div>
             )}
-          </div>
-        )}
 
-        {/* ======================== TAB: NUEVO RASTREO ======================== */}
-        {activeTab === 'new-scan' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-in fade-in">
-            <form onSubmit={handleSubmitJob} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
+            {/* SECCION: NUEVO RASTREO */}
+            {configTab === 'new-scan' && (
+              <div className="animate-in fade-in max-w-2xl mx-auto">
+                <form onSubmit={handleSubmitJob} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
               <h2 className="text-xl font-bold flex items-center gap-2 mb-6 text-white"><PlusCircle className="text-violet-400" /> Nuevo Spider Job</h2>
               <div>
                 <label className="block text-sm text-slate-400 mb-2">Rubro (Agrupación Estricta)</label>
@@ -1097,39 +1155,58 @@ export default function MarketSpiderDashboard() {
               </button>
               {submitSuccess && <p className="text-emerald-400 text-sm text-center">¡Trabajo enviado al servidor Playwright!</p>}
             </form>
-
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-xl font-bold flex items-center gap-2 mb-6 text-white"><Activity className="text-violet-400" /> Cola de Servidor</h2>
-              <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
-                {jobs.map((job) => {
-                  const cfg = JOB_STATUS_CONFIG[job.status] || JOB_STATUS_CONFIG.pending;
-                  const Icon = cfg.icon;
-                  return (
-                    <div key={job.id} className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="flex items-center gap-2">
-                          <span className={`px-2 py-1 flex items-center gap-1 text-[10px] uppercase font-bold rounded border ${cfg.className}`}>
-                            <Icon size={12} className={job.status === 'running' ? 'animate-spin' : ''} /> {cfg.label}
-                          </span>
-                          <span className="font-bold text-white text-sm">{job.config?.rubro}</span>
-                        </div>
-                        {job.status === 'scheduled' && (
-                          <button onClick={() => handleForceScan(job.id)} className="flex items-center gap-1 text-xs bg-indigo-500/20 text-indigo-400 px-2 py-1 rounded hover:bg-indigo-500/30 transition-colors">
-                            <Play size={10} fill="currentColor" /> Forzar Ahora
-                          </button>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-400">{job.message}</p>
-                    </div>
-                  )
-                })}
-              </div>
             </div>
-          </div>
-        )}
+            )}
+
+            {/* SECCION: TRABAJOS Y ARAÑA */}
+            {configTab === 'jobs' && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 animate-in fade-in">
+                <h2 className="text-xl font-bold flex items-center gap-2 mb-6 text-white"><Activity className="text-violet-400" /> Cola de Servidor y Control de Arañas</h2>
+                <p className="text-sm text-slate-400 mb-6">Aquí puedes monitorear los trabajos que procesa el motor de Python. Usa el cerrojo para detener o reanudar tareas individuales.</p>
+                <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
+                  {jobs.length === 0 && <p className="text-slate-500 text-center py-8">No hay trabajos en cola.</p>}
+                  {jobs.map((job) => {
+                    const cfg = JOB_STATUS_CONFIG[job.status] || JOB_STATUS_CONFIG.pending;
+                    const Icon = cfg.icon;
+                    const isPausable = job.status === 'pending' || job.status === 'scheduled';
+                    const isResumable = job.status === 'paused';
+                    return (
+                      <div key={job.id} className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex items-center gap-3">
+                            <span className={`px-2 py-1 flex items-center gap-1 text-[10px] uppercase font-bold rounded border ${cfg.className}`}>
+                              <Icon size={12} className={job.status === 'running' ? 'animate-spin' : ''} /> {cfg.label}
+                            </span>
+                            <span className="font-bold text-white text-sm">{job.config?.rubro || 'Trabajo del Sistema'}</span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            {job.status === 'scheduled' && (
+                              <button onClick={() => handleForceScan(job.id)} className="flex items-center gap-1 text-xs bg-indigo-500/20 text-indigo-400 px-2 py-1 rounded hover:bg-indigo-500/30 transition-colors">
+                                <Play size={10} fill="currentColor" /> Forzar Ahora
+                              </button>
+                            )}
+                            {isPausable && (
+                              <button onClick={() => handleToggleJobStatus(job.id, job.status)} className="flex items-center gap-1 text-xs bg-amber-500/20 text-amber-400 px-2 py-1 rounded hover:bg-amber-500/30 transition-colors border border-amber-500/50" title="Pausar Araña (Cerrojo)">
+                                ⏸️ Pausar
+                              </button>
+                            )}
+                            {isResumable && (
+                              <button onClick={() => handleToggleJobStatus(job.id, job.status)} className="flex items-center gap-1 text-xs bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded hover:bg-emerald-500/30 transition-colors border border-emerald-500/50" title="Reanudar Araña (Quitar Cerrojo)">
+                                ▶️ Reanudar
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-400">{job.message}</p>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
         {/* ======================== TAB: HISTORIAL ======================== */}
-        {activeTab === 'history' && (
+        {configTab === 'history' && (
           <div className="animate-in fade-in duration-500">
             <h2 className="text-2xl font-bold flex items-center gap-2 mb-6"><Calendar className="text-slate-400" /> Registro de Scans Exactos</h2>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-800/50">
@@ -1153,6 +1230,9 @@ export default function MarketSpiderDashboard() {
               ))}
             </div>
           </div>
+        )}
+
+        </div>
         )}
 
       </main>
