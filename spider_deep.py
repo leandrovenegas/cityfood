@@ -74,7 +74,7 @@ async def process_url(page, url):
     await asyncio.sleep(3)
 
     # 1. Extraer Emails
-    js_extract = """() => {
+    js_extract = r"""() => {
         const text = document.body.innerText || "";
         const emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi;
         const matched = text.match(emailRegex) || [];
