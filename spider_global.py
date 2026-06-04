@@ -1,4 +1,6 @@
 import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 print("INICIANDO SPIDER GLOBAL...")
 import asyncio
 from playwright.async_api import async_playwright
@@ -70,22 +72,44 @@ def upsert_business(place_data: dict, place_id: str):
     
     if doc.exists:
         old_data = doc.to_dict()
+        
+        # Preservar el estado existente (ej. "crm", "discarded") y fecha de creación
+        place_data["status"] = old_data.get("status", "pending")
+        if "created_at" in old_data:
+            place_data["created_at"] = old_data["created_at"]
+            
         old_reviews = old_data.get("reviews", 0)
         new_reviews = place_data.get("reviews", 0)
+        old_rating = old_data.get("rating", 0.0)
+        new_rating = place_data.get("rating", 0.0)
         
-        # Si hubo un cambio relevante, guardar historial
-        if old_reviews != new_reviews or old_data.get("rating") != place_data.get("rating"):
+        rating_changed = old_rating != new_rating
+        reviews_changed = old_reviews != new_reviews
+        
+        if rating_changed or reviews_changed:
             # Enviar Snapshot
             history_ref = businesses_ref.collection("history").document(now.isoformat())
             history_ref.set({
                 "date": now,
-                "rating": place_data.get("rating"),
+                "rating": new_rating,
                 "reviews": new_reviews,
                 "visualScore": place_data.get("visualScore", 0)
             })
-            # Actualizar master record
-            businesses_ref.update(place_data)
-            print(f"      \033[93m⚡ [UPDATE]\033[0m {place_data['name'][:30]} (Cambios detectados. Snapshot listo)")
+            
+        # Detectar si hay cambios reales en otros campos para actualizar el documento maestro
+        has_updates = False
+        update_payload = {}
+        for key, val in place_data.items():
+            if key == "last_seen":
+                continue
+            if old_data.get(key) != val:
+                has_updates = True
+                update_payload[key] = val
+                
+        if has_updates:
+            update_payload["last_seen"] = now
+            businesses_ref.update(update_payload)
+            print(f"      \033[93m⚡ [UPDATE]\033[0m {place_data['name'][:30]} (Cambios detectados: {', '.join(update_payload.keys())})")
         else:
             print(f"      \033[90m〰️ [SKIP]\033[0m {place_data['name'][:30]} (Sin cambios recientes)")
     else:
@@ -173,27 +197,80 @@ async def extract_feed_data(page, lat, lng, worker_id):
         rating = 0.0
         reviews = 0
         category = ""
+        phone = ""
+        hours = ""
+        address = ""
         
         # Parse extra text lines for details
-        lines = text_block.split('\n')
-        for line in lines:
-            line_str = line.strip()
-            # Catch rating like 4.5 (130)
-            if not rating and not reviews:
-                match_rev = re.search(r'([\d\.,]+)\s*\(([\d\.,]+)\)', line_str)
-                if match_rev:
-                    try:
-                        rating = float(match_rev.group(1).replace(',', '.'))
-                        reviews = int(match_rev.group(2).replace('.', '').replace(',', ''))
-                    except: pass
+        lines = [line.strip() for line in text_block.split('\n') if line.strip()]
+        for i, line_str in enumerate(lines):
+            if i == 0:
+                continue # Skip name line
+                
+            # 1. Catch rating like 4.5 (130) or 4.5 (1.2K)
+            match_rev = re.search(r'([\d\.,]+)\s*\(([\d\.,Kk]+)\)', line_str)
+            if match_rev:
+                try:
+                    rating_str = match_rev.group(1).replace(',', '.')
+                    rating = float(rating_str)
+                    
+                    rev_str = match_rev.group(2).lower()
+                    if 'k' in rev_str:
+                        rev_num = float(rev_str.replace('k', '').replace('.', '').replace(',', '')) * 1000
+                        reviews = int(rev_num)
+                    else:
+                        reviews = int(rev_str.replace('.', '').replace(',', ''))
+                except:
+                    pass
             
-            # Catch category after middle dot -> 4.5 (130) · Cafeteria
-            if '·' in line_str:
-                parts = line_str.split('·')
-                if len(parts) > 1:
-                    cat_candidate = parts[-1].strip()
-                    if cat_candidate and len(cat_candidate) > 2 and '¢' not in cat_candidate and '$' not in cat_candidate:
-                        category = cat_candidate
+            # 2. Check each part separated by middle dot
+            parts = [p.strip() for p in line_str.split('·')]
+            for part in parts:
+                # Check for phone
+                cleaned_phone = re.sub(r'[\s\(\)\-\+]', '', part)
+                if cleaned_phone.isdigit() and 7 <= len(cleaned_phone) <= 15:
+                    letter_count = sum(c.isalpha() for c in part)
+                    if letter_count == 0 or (letter_count <= 2 and part.lower().startswith('tel')):
+                        phone = part
+                        continue
+                
+                # Check for hours
+                if any(h in part.lower() for h in ["abierto", "cerrado", "cierra a", "abre a", "horas"]):
+                    hours = part
+                    continue
+
+                # Check for category candidates
+                is_rating = re.search(r'^\d[\d\.,]*$', part) or '(' in part or ')' in part
+                is_price = re.search(r'^[\$\€\£\¥\¢\+]+$', part)
+                is_service = any(s in part.lower() for s in ["consumo en el", "para llevar", "entrega a", "reparto a", "domicilio", "tienda", "recogida"])
+                is_hour_related = any(h in part.lower() for h in ["abierto", "cerrado", "cierra", "abre", "horas"])
+                is_address_related = any(a in part.lower() for a in ["av.", "calle", "pasaje", "camino", "ruta", "nº", "#", "depto", "oficina"])
+                
+                if (3 <= len(part) <= 40 and 
+                    not is_rating and 
+                    not is_price and 
+                    not is_service and 
+                    not is_hour_related and 
+                    not is_address_related and 
+                    sum(c.isdigit() for c in part) < 3):
+                    
+                    if not category or i <= 2:
+                        category = part
+
+        # 3. Check for address candidates
+        for i, line_str in enumerate(lines):
+            if i == 0:
+                continue
+            parts = [p.strip() for p in line_str.split('·')]
+            for part in parts:
+                if part in [category, phone, hours]:
+                    continue
+                is_service = any(s in part.lower() for s in ["consumo en el", "para llevar", "entrega a", "reparto a", "domicilio", "tienda", "recogida"])
+                is_rating = '(' in part or ')' in part or re.search(r'^\d[\d\.,]*$', part)
+                is_price = re.search(r'^[\$\€\£\¥\¢\+]+$', part)
+                if len(part) > 5 and not is_service and not is_rating and not is_price:
+                    if not address:
+                        address = part
 
         # Calcular Need Score Base
         need_score = 0
@@ -213,6 +290,9 @@ async def extract_feed_data(page, lat, lng, worker_id):
             "rating": rating,
             "reviews": reviews,
             "category": category,
+            "phone": phone,
+            "hours": hours,
+            "address": address,
             "status": "pending",
             "needScore": need_score,
             "last_seen": datetime.datetime.now(datetime.timezone.utc)

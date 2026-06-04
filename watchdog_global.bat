@@ -6,7 +6,7 @@ echo ========================================================
 echo Iniciando Spider Global (Manejando Cola H3)
 echo Fecha y hora: %date% %time%
 echo ========================================================
-.venv\Scripts\python.exe spider_global.py
+.venv\Scripts\python.exe -u spider_global.py
 
 echo.
 echo [!] El spider ha terminado o colapsado.
