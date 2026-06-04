@@ -87,9 +87,7 @@ export default function MarketSpiderDashboard() {
   useEffect(() => {
     signInAnonymously(auth).then((result) => {
       console.log("✅ Authenticated as NEW Anonymous:", result.user.uid);
-      // 🔥 LA MAGIA ANTIGRAVEDAD: 
-      // Ignoramos el nuevo UID de Vercel y forzamos el UID donde el Spider de Python guarda los datos.
-      setUserId("Hp1YGeni2DgiWrtrIKUgmgki7UL2");
+      setUserId(result.user.uid);
     }).catch((err) => {
       console.error("🔥 ERROR AUTH FIREBASE:", err);
       setError(`Error de Auth: ${err.message}`);

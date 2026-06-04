@@ -11,7 +11,6 @@ import {
 } from 'lucide-react';
 
 const APP_ID = 'marketspider-v3';
-const USER_ID = 'Hp1YGeni2DgiWrtrIKUgmgki7UL2';
 
 const PIPELINE = [
   { id: 'Prospecto',       label: 'Prospecto',       emoji: '🎯', color: 'slate' },
@@ -35,12 +34,13 @@ const OPPORTUNITY_GAPS = [
 ];
 
 // ─── Subcomponent: Contact Entry ─────────────────────────────────────────────
-function ContactEntry({ entry, leadId, onDelete }) {
+function ContactEntry({ entry, leadId, userId, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(entry.text);
 
   const handleSave = async () => {
-    const ref = doc(db, `artifacts/${APP_ID}/users/${USER_ID}/crm_leads`, leadId);
+    if (!userId) return;
+    const ref = doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`, leadId);
     const lead = await new Promise(res => onSnapshot(ref, snap => res(snap.data()), { once: true }));
     // We update via arrayRemove/arrayUnion on contacts
     await updateDoc(ref, {
@@ -85,6 +85,7 @@ function ContactEntry({ entry, leadId, onDelete }) {
 export default function LeadDetailPage({ params }) {
   const { leadId } = use(params);
   const router = useRouter();
+  const [userId, setUserId] = useState(null);
   const [lead, setLead] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -104,17 +105,28 @@ export default function LeadDetailPage({ params }) {
   const [savingTask, setSavingTask] = useState(false);
 
   useEffect(() => {
-    signInAnonymously(auth).then(() => {
-      const ref = doc(db, `artifacts/${APP_ID}/users/${USER_ID}/crm_leads`, leadId);
-      const unsub = onSnapshot(ref, snap => {
-        if (snap.exists()) setLead({ id: snap.id, ...snap.data() });
-        setLoading(false);
-      });
-      return () => unsub();
+    signInAnonymously(auth).then((result) => {
+      setUserId(result.user.uid);
+    }).catch(err => {
+      console.error("Auth error:", err);
+      setLoading(false);
     });
-  }, [leadId]);
+  }, []);
 
-  const ref = () => doc(db, `artifacts/${APP_ID}/users/${USER_ID}/crm_leads`, leadId);
+  useEffect(() => {
+    if (!userId) return;
+    const ref = doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`, leadId);
+    const unsub = onSnapshot(ref, snap => {
+      if (snap.exists()) setLead({ id: snap.id, ...snap.data() });
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [userId, leadId]);
+
+  const ref = () => {
+    if (!userId) throw new Error("User not authenticated");
+    return doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`, leadId);
+  };
 
   // ── Pipeline advancement ──────────────────────────────────────────────────
   const handleSetStage = async (stageId) => {
@@ -470,7 +482,7 @@ export default function LeadDetailPage({ params }) {
                   </div>
                 ) : (
                   [...(lead.contacts || [])].reverse().map(entry => (
-                    <ContactEntry key={entry.id} entry={entry} leadId={leadId} onDelete={handleDeleteContact} />
+                    <ContactEntry key={entry.id} entry={entry} leadId={leadId} userId={userId} onDelete={handleDeleteContact} />
                   ))
                 )}
               </div>

@@ -6,9 +6,9 @@ import { db, auth, signInAnonymously } from '../firebase';
 import { ArrowLeft, Search, Loader2, Star, Phone, Globe, MapPin, X, ExternalLink, Play, Calendar, Activity, Filter, Server, ShieldCheck, Smartphone, Target, CheckCircle } from 'lucide-react';
 
 const APP_ID = "marketspider-v3";
-const USER_ID = "Hp1YGeni2DgiWrtrIKUgmgki7UL2";
 
 export default function DirectoryExcelView() {
+  const [userId, setUserId] = useState(null);
   const [scans, setScans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -40,7 +40,8 @@ export default function DirectoryExcelView() {
                 const newAudit = data.audit;
 
                 // Actualizar Firestore obteniendo el doc fresco para evitar sobreescritura de estado stale
-                const scanRef = doc(db, `artifacts/${APP_ID}/users/${USER_ID}/scans/`, target.scanId);
+                if (!userId) return;
+                const scanRef = doc(db, `artifacts/${APP_ID}/users/${userId}/scans/`, target.scanId);
                 const scanSnap = await getDoc(scanRef);
                 if(scanSnap.exists()) {
                     const scanData = scanSnap.data();
@@ -89,7 +90,8 @@ export default function DirectoryExcelView() {
       const newAudit = data.audit;
       
       // Update Firestore
-      const scanRef = doc(db, `artifacts/${APP_ID}/users/${USER_ID}/scans/`, selectedPlace.scanId);
+      if (!userId) return;
+      const scanRef = doc(db, `artifacts/${APP_ID}/users/${userId}/scans/`, selectedPlace.scanId);
       const scanObj = scans.find(s => s.id === selectedPlace.scanId);
       if(scanObj) {
          const newPlaces = scanObj.places.map(p => {
@@ -115,7 +117,8 @@ export default function DirectoryExcelView() {
     try {
       // Verificar si ya existe (opcional, pero recomendado)
       // Por simplicidad en esta vista de "excel", lo agregamos directamente
-      await addDoc(collection(db, `artifacts/${APP_ID}/users/${USER_ID}/crm_leads`), {
+      if (!userId) return;
+      await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`), {
         name: selectedPlace.name,
         phone: selectedPlace.phone || '',
         website: selectedPlace.website || '',
@@ -138,18 +141,26 @@ export default function DirectoryExcelView() {
 
   // Auth and Data Fetching
   useEffect(() => {
-    signInAnonymously(auth).then(() => {
-      const q = query(collection(db, `artifacts/${APP_ID}/users/${USER_ID}/scans`), orderBy("date", "desc"));
-      const unsub = onSnapshot(q, (snapshot) => {
-        setScans(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        setLoading(false);
-      }, (err) => {
-        console.error("Error fetching scans:", err);
-        setLoading(false);
-      });
-      return () => unsub();
+    signInAnonymously(auth).then((result) => {
+      setUserId(result.user.uid);
+    }).catch(err => {
+      console.error("Auth error:", err);
+      setLoading(false);
     });
   }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    const q = query(collection(db, `artifacts/${APP_ID}/users/${userId}/scans`), orderBy("date", "desc"));
+    const unsub = onSnapshot(q, (snapshot) => {
+      setScans(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setLoading(false);
+    }, (err) => {
+      console.error("Error fetching scans:", err);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [userId]);
 
   // Proceso de Datos: Extraer todos los locales y dedupicarlos (manteniendo el mas reciente)
   const allPlaces = useMemo(() => {

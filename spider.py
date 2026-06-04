@@ -61,8 +61,10 @@ def audit_website(url: str) -> dict:
     if aud["secure"]: aud["score"] += 20
         
     try:
+        import ssl
+        context = ssl._create_unverified_context()
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-        with urllib.request.urlopen(req, timeout=4) as response:
+        with urllib.request.urlopen(req, timeout=4, context=context) as response:
             if response.getcode() == 200:
                 aud["online"] = True
                 aud["score"] += 30
@@ -290,7 +292,8 @@ def worker_loop(db):
             scan_data = run_spider_engine(config)
 
             # 3. Subir resultados a la colección de scans
-            scans_path = f"artifacts/{APP_ID}/users/{USER_ID}/scans"
+            user_id = job_ref.parent.parent.id
+            scans_path = f"artifacts/{APP_ID}/users/{user_id}/scans"
             db.collection(scans_path).document().set(scan_data)
             print(f"  ✅ {len(scan_data['places'])} locales guardados en Firestore.")
 
@@ -355,8 +358,7 @@ def start_listening(db):
                     # Liberar del set local si el trabajo cambió de status y finalizó/fayó
                     processed_jobs.discard(job_id)
 
-    col_ref = db.collection(jobs_path)
-    col_watch = col_ref.on_snapshot(on_snapshot)
+    col_watch = db.collection_group("scan_jobs").on_snapshot(on_snapshot)
     return col_watch
 
 # ==========================================
@@ -376,13 +378,11 @@ def verify_stale_tasks(db):
         # printear un estado sutil ocasional.
         return
         
-    jobs_path = f"artifacts/{APP_ID}/users/{USER_ID}/scan_jobs"
-    
     try:
         now = datetime.datetime.now(datetime.timezone.utc)
         one_day_ago = now - datetime.timedelta(days=1, hours=20) # Añadimos cierto buffer al de un día para ser elásticos
         
-        docs = db.collection(jobs_path).stream()
+        docs = db.collection_group("scan_jobs").stream()
         requeued_count = 0
         
         for doc in docs:

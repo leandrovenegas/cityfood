@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 
 export async function POST(request) {
+  // Desactivar rechazo de certificados no autorizados/inválidos en Node.js para auditar pymes locales
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   try {
     const { url } = await request.json();
     if (!url) return NextResponse.json({ error: "No URL provided" }, { status: 400 });

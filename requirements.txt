@@ -1,0 +1,4 @@
+firebase-admin>=6.5.0
+playwright>=1.44.0
+playwright-stealth>=1.0.6
+h3>=4.0.0b1

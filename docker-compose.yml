@@ -1,0 +1,33 @@
+services:
+  # Spider principal: procesa cola de scan_jobs y auditorías superficiales
+  spider:
+    build: .
+    container_name: marketspider-main
+    command: python spider.py
+    restart: always
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  # Spider profundo: procesa deep_scan_queue para correos y redes sociales
+  spider_deep:
+    build: .
+    container_name: marketspider-deep
+    command: python spider_deep.py
+    restart: always
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  # Spider global: procesa cuadrícula H3 de geolocalización espacial
+  spider_global:
+    build: .
+    container_name: marketspider-global
+    command: python spider_global.py
+    restart: always
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
