@@ -11,7 +11,11 @@ from firebase_admin import credentials, firestore
 # ==========================================
 # CONFIGURACIÓN
 # ==========================================
-SERVICE_ACCOUNT_FILE = 'serviceAccountKey.json'
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+SERVICE_ACCOUNT_FILE = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "serviceAccountKey.json")
 USER_ID = "Hp1YGeni2DgiWrtrIKUgmgki7UL2"
 APP_ID = "marketspider-v3"
 

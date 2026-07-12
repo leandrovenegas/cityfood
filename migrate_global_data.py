@@ -1,11 +1,16 @@
 import sys
+import os
 import firebase_admin
 from firebase_admin import credentials, firestore
+from dotenv import load_dotenv
+
+load_dotenv()
 
 print("INICIANDO MIGRACION DE DATOS: Calculando Need Scores...")
 
 try:
-    cred = credentials.Certificate("serviceAccountKey.json")
+    key_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "serviceAccountKey.json")
+    cred = credentials.Certificate(key_path)
     firebase_admin.initialize_app(cred)
 except ValueError:
     pass

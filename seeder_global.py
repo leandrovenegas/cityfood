@@ -2,10 +2,15 @@ import h3
 import firebase_admin
 from firebase_admin import credentials, firestore
 import datetime
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Inicializar Firebase
 try:
-    cred = credentials.Certificate("serviceAccountKey.json")
+    key_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "serviceAccountKey.json")
+    cred = credentials.Certificate(key_path)
     firebase_admin.initialize_app(cred)
 except ValueError:
     pass

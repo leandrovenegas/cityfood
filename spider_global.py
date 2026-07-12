@@ -12,9 +12,15 @@ import urllib.parse
 import urllib.request
 import re
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Firebase Setup
 try:
-    cred = credentials.Certificate("serviceAccountKey.json")
+    key_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "serviceAccountKey.json")
+    cred = credentials.Certificate(key_path)
     firebase_admin.initialize_app(cred)
 except ValueError:
     pass
@@ -301,7 +307,9 @@ async def extract_feed_data(page, lat, lng, worker_id):
 
 async def worker(worker_id):
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        import os
+        exec_path = '/usr/bin/chromium-browser' if os.path.exists('/usr/bin/chromium-browser') else None
+        browser = await p.chromium.launch(headless=True, executable_path=exec_path)
         context = await browser.new_context(
             user_agent=f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 WID/{worker_id}"
         )

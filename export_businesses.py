@@ -5,7 +5,11 @@ import datetime
 import os
 
 # Configuración de Firebase
-SERVICE_ACCOUNT_FILE = 'serviceAccountKey.json'
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+SERVICE_ACCOUNT_FILE = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "serviceAccountKey.json")
 COLLECTION_PATH = 'artifacts/marketspider-v3/global_businesses'
 OUTPUT_FILE = 'global_businesses.json'
 
