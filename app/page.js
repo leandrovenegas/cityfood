@@ -7,7 +7,6 @@ import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Se
 import { supabase } from './supabase';
 export const dynamic = 'force-dynamic';
 const MapComponent = nextDynamic(() => import('./components/MapComponent'), { ssr: false });
-import LogsTerminal from './components/LogsTerminal';
 
 const APP_ID = "marketspider-v3";
 
@@ -462,7 +461,6 @@ export default function MarketSpiderDashboard() {
               </button>
             </div>
             
-            <LogsTerminal />
           </div>
         )}
 
