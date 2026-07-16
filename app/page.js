@@ -3,11 +3,11 @@ import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import nextDynamic from 'next/dynamic';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle, Play, Clock, CheckCircle, XCircle, PlusCircle, RefreshCw, Trash2, Phone, Globe, Map as MapIcon, FileText, Target, DollarSign, CheckSquare, XSquare, Sparkles } from 'lucide-react';
-import { db, auth, signInAnonymously } from './firebase';
-import { collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, setDoc, limit, startAfter, getDocs, getCountFromServer, where } from "firebase/firestore";
+import { Camera, Video, TrendingDown, Copy, Star, MapPin, Activity, Calendar, Search, Loader2, AlertCircle, Play, Square, Clock, CheckCircle, XCircle, PlusCircle, RefreshCw, Trash2, Phone, Globe, Map as MapIcon, FileText, Target, DollarSign, CheckSquare, XSquare, Sparkles } from 'lucide-react';
+import { supabase } from './supabase';
 export const dynamic = 'force-dynamic';
 const MapComponent = nextDynamic(() => import('./components/MapComponent'), { ssr: false });
+import LogsTerminal from './components/LogsTerminal';
 
 const APP_ID = "marketspider-v3";
 
@@ -28,29 +28,12 @@ const REPEAT_OPTIONS = [
   { value: 48, label: "Cada 48 horas" },
 ];
 
-const CRM_STATUSES = [
-  { id: 'Prospecto', icon: Target, color: 'slate' },
-  { id: 'Primer Contacto', icon: FileText, color: 'indigo' },
-  { id: 'Negociación', icon: DollarSign, color: 'amber' },
-  { id: 'Ganado', icon: CheckSquare, color: 'emerald' },
-  { id: 'Perdido', icon: XSquare, color: 'rose' }
-];
 
-const OPPORTUNITY_GAPS = [
-  { id: 'no_reclamada',   emoji: '🔓', label: 'Ficha no reclamada',    color: 'bg-rose-500/20 text-rose-300 border-rose-500/40' },
-  { id: 'sin_web',        emoji: '🌐', label: 'Sin sitio web',        color: 'bg-orange-500/20 text-orange-300 border-orange-500/40' },
-  { id: 'sin_video',      emoji: '🎥', label: 'Sin video',            color: 'bg-violet-500/20 text-violet-300 border-violet-500/40' },
-  { id: 'sin_menu',       emoji: '🍽️', label: 'Sin carta/menú',      color: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' },
-  { id: 'sin_respuesta',  emoji: '💬', label: 'No responde reviews',  color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
-  { id: 'fotos_viejas',   emoji: '📷', label: 'Fotos desactualizadas', color: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
-  { id: 'solo_social',    emoji: '📱', label: 'Solo redes sociales',  color: 'bg-pink-500/20 text-pink-300 border-pink-500/40' },
-  { id: 'rating_bajo',    emoji: '⭐', label: 'Rating bajo',          color: 'bg-amber-600/20 text-amber-200 border-amber-600/40' },
-];
 
 export default function MarketSpiderDashboard() {
+  const [selectedSource, setSelectedSource] = useState('gmaps');
   const [scans, setScans] = useState([]);
   const [jobs, setJobs] = useState([]);
-  const [crmLeads, setCrmLeads] = useState([]);
   const [globalBusinesses, setGlobalBusinesses] = useState([]);
   const [totalGlobalBusinesses, setTotalGlobalBusinesses] = useState(0);
   const [totalPending, setTotalPending] = useState(0);
@@ -66,7 +49,6 @@ export default function MarketSpiderDashboard() {
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState(null);
   const [error, setError] = useState(null);
-  const [generatingProposalFor, setGeneratingProposalFor] = useState(null);
 
   const [formConfig, setFormConfig] = useState({ rubro: '', ciudad: '', maxResults: 15, autoRepeatHours: 0 });
   const [submitting, setSubmitting] = useState(false);
@@ -77,122 +59,102 @@ export default function MarketSpiderDashboard() {
 
   const [filterCategory, setFilterCategory] = useState('');
   const [filterLocation, setFilterLocation] = useState('');
-  const [crmSearch, setCrmSearch] = useState('');
   const [localSearch, setLocalSearch] = useState('');
-
-  const [showAddLeadModal, setShowAddLeadModal] = useState(false);
-  const [newLeadData, setNewLeadData] = useState({ name: '', phone: '', website: '' });
+  const [toggleScraperLoading, setToggleScraperLoading] = useState(false);
 
   // 1. Auth
   useEffect(() => {
-    signInAnonymously(auth).then((result) => {
-      console.log("✅ Authenticated as NEW Anonymous:", result.user.uid);
-      setUserId(result.user.uid);
-    }).catch((err) => {
-      console.error("🔥 ERROR AUTH FIREBASE:", err);
-      setError(`Error de Auth: ${err.message}`);
-      setLoading(false);
-    });
+    setUserId('default-user');
+    setLoading(false);
   }, []);
 
   // 2. Fetch Scans
   useEffect(() => {
-    if (!userId) return;
-    const q = query(collection(db, `artifacts/${APP_ID}/users/${userId}/scans`), orderBy("date", "desc"));
-    const unsub = onSnapshot(q, (snapshot) => {
-      setScans(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      setLoading(false);
-    }, (err) => {
-      console.error("🔥 ERROR FIRESTORE SCANS:", err);
-      setError(`Error DB (Scans): ${err.message}`);
-      setLoading(false);
-    });
-    return () => unsub();
+    setScans([]);
   }, [userId]);
 
   // 3. Fetch Jobs
   useEffect(() => {
     if (!userId) return;
-    const q = query(collection(db, `artifacts/${APP_ID}/users/${userId}/scan_jobs`), orderBy("createdAt", "desc"));
-    const unsub = onSnapshot(q, (snapshot) => setJobs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))), (err) => {
-      console.error("🔥 ERROR FIRESTORE JOBS:", err);
-      setError(`Error DB (Jobs): ${err.message}`);
-    });
-    return () => unsub();
+    const fetchJobs = async () => {
+      const { data } = await supabase.from('global_job_queue').select('*').order('created_at', { ascending: false }).limit(50);
+      if (data) setJobs(data);
+    };
+    fetchJobs();
+    const channel = supabase.channel('jobs_changes').on('postgres_changes', { event: '*', schema: 'public', table: 'global_job_queue' }, fetchJobs).subscribe();
+    return () => supabase.removeChannel(channel);
   }, [userId]);
 
   // 4. Fetch Global Businesses & Stats
   useEffect(() => {
     if (!userId) return;
-
-    // A. Contadores estáticos (muy baratos en lecturas)
+    const collName = selectedSource === 'gmaps' ? 'global_businesses' : 'amarillas_businesses';
     const fetchCounts = async () => {
       try {
-        const collRef = collection(db, `artifacts/${APP_ID}/global_businesses`);
-        const snapshotGlobal = await getCountFromServer(collRef);
-        setTotalGlobalBusinesses(snapshotGlobal.data().count);
-        
-        const qPending = query(collRef, where("status", "==", "pending"));
-        const snapshotPending = await getCountFromServer(qPending);
-        setTotalPending(snapshotPending.data().count);
-      } catch (e) {
-        console.error("Error fetching counts", e);
-      }
+        const { count: globalCount } = await supabase.from(collName).select('*', { count: 'exact', head: true });
+        setTotalGlobalBusinesses(globalCount || 0);
+        const { count: pendingCount } = await supabase.from(collName).select('*', { count: 'exact', head: true }).eq('status', 'pending');
+        setTotalPending(pendingCount || 0);
+      } catch (e) {}
     };
     fetchCounts();
+    const fetchBusinesses = async () => {
+      const orderCol = selectedSource === 'gmaps' ? 'needscore' : 'created_at';
+      const { data } = await supabase.from(collName).select('*').eq('status', 'pending').order(orderCol, { ascending: false }).limit(30);
+      if (data) {
+        setGlobalBusinesses(data);
+        setLastVisible(30);
+      }
+    };
+    fetchBusinesses();
+    const channel = supabase.channel('biz_changes').on('postgres_changes', { event: '*', schema: 'public', table: collName }, () => {
+      fetchBusinesses(); fetchCounts();
+    }).subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [userId, selectedSource]);
 
-    // B. Obtener los primeros 30 locales pendientes para Triage (Paginado)
-    const q = query(
-      collection(db, `artifacts/${APP_ID}/global_businesses`),
-      where("status", "==", "pending"),
-      orderBy("needScore", "desc"),
-      limit(30)
-    );
-    const unsub = onSnapshot(q, (snapshot) => {
-      setGlobalBusinesses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      setLastVisible(snapshot.docs[snapshot.docs.length - 1]);
-    }, (err) => {
-      console.error("🔥 ERROR FIRESTORE GLOBAL BUSINESSES:", err);
-    });
-    return () => unsub();
-  }, [userId]);
+  const handleToggleScrapers = async (action) => {
+    setToggleScraperLoading(true);
+    try {
+      const res = await fetch('/api/scraper-control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, target: 'all' })
+      });
+      const data = await res.json();
+      if (!data.success) {
+        alert("Error al " + (action === 'start' ? "arrancar" : "detener") + " los scrapers: " + data.error);
+      } else {
+        // success - ui will be updated naturally or wait for polling.
+      }
+    } catch (e) {
+      alert("Error de red: " + e.message);
+    } finally {
+      setToggleScraperLoading(false);
+    }
+  };
 
   const handleLoadMore = async () => {
     if (!lastVisible) return;
     setLoadingMore(true);
+    const collName = selectedSource === 'gmaps' ? 'global_businesses' : 'amarillas_businesses';
+    const orderCol = selectedSource === 'gmaps' ? 'needscore' : 'created_at';
     try {
-      const q = query(
-        collection(db, `artifacts/${APP_ID}/global_businesses`),
-        where("status", "==", "pending"),
-        orderBy("needScore", "desc"),
-        startAfter(lastVisible),
-        limit(30)
-      );
-      const snapshot = await getDocs(q);
-      if (!snapshot.empty) {
-        setGlobalBusinesses(prev => [...prev, ...snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))]);
-        setLastVisible(snapshot.docs[snapshot.docs.length - 1]);
+      const { data } = await supabase.from(collName).select('*').eq('status', 'pending').order(orderCol, { ascending: false }).range(lastVisible, lastVisible + 29);
+      if (data && data.length > 0) {
+        setGlobalBusinesses(prev => [...prev, ...data]);
+        setLastVisible(prev => prev + 30);
       } else {
-        setLastVisible(null); // no hay mas
+        setLastVisible(null);
       }
     } catch (e) {
-      console.error("Error cargando más:", e);
+      console.error('Error cargando más:', e);
     } finally {
       setLoadingMore(false);
     }
   };
 
-  // 5. Fetch CRM Leads
-  useEffect(() => {
-    if (!userId) return;
-    const q = query(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`));
-    const unsub = onSnapshot(q, (snapshot) => {
-      setCrmLeads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    }, (err) => {
-      console.error("🔥 ERROR FIRESTORE CRM LEADS:", err);
-    });
-    return () => unsub();
-  }, [userId]);
+
 
   // Derivar Listado de Categorias y Ciudades
   const filterOptions = useMemo(() => {
@@ -273,48 +235,16 @@ export default function MarketSpiderDashboard() {
     alert(`Pitch copiado para ${place.name}!`);
   };
 
-  const handleDeletePlace = async (scanId, placeName) => {
-    if (!confirm(`¿Eliminar permanentemente a ${placeName} de la base de datos?`)) return;
-    const scan = scans.find(s => s.id === scanId);
-    if (!scan) return;
-    const newPlaces = scan.places.filter(p => p.name !== placeName);
-    await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/scans/`, scanId), { places: newPlaces });
-  };
-
-  const handleSetStatus = async (place, newStatus) => {
-    if (!userId) return;
-    
-    // Actualizar el estado en globalBusinesses
-    if (place.id) {
-       await updateDoc(doc(db, `artifacts/${APP_ID}/global_businesses`, place.id), { status: newStatus });
-    }
-
-    // Si lo manda al CRM, también lo agrega como lead
-    if (newStatus === 'crm') {
-      const exists = crmLeads.find(lead => lead.name === place.name);
-      if (!exists) {
-        await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`), {
-          name: place.name, 
-          phone: place.phone || '', 
-          website: place.url || place.website || '',
-          rank: place.rank || 0, 
-          status: 'Prospecto', 
-          notes: '', 
-          updatedAt: serverTimestamp(),
-          global_id: place.id || null
-        });
-      }
-    }
-  };
+  const handleDeletePlace = async (scanId, placeName) => {};
 
   const handleDeleteScan = async (scanId, e) => {
     e.stopPropagation();
     if (!confirm("¿Eliminar este escaneo entero? Se perderá permanentemente del tracking.")) return;
-    await deleteDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/scans/`, scanId));
+    await supabase.from('scans').delete().eq('id', scanId);
   };
 
   const handleForceScan = async (jobId) => {
-    await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/scan_jobs/`, jobId), { status: 'pending', message: 'Forzado manual...' });
+    await supabase.from('global_job_queue').update({ status: 'pending', message: 'Forzado manual...' }).eq('id', jobId);
   };
 
   const handleSubmitJob = async (e) => {
@@ -328,176 +258,38 @@ export default function MarketSpiderDashboard() {
     const jobId = `job_${rubroLimpio}_${ciudadLimpia}`;
 
     try {
-      await setDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/scan_jobs`, jobId), {
+      const { error } = await supabase.from('global_job_queue').upsert({
+        id: jobId,
         status: "pending",
         config: formConfig,
-        message: "Enviado a cola del Playwright Spider...",
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
+        message: "Enviado a cola del Playwright Spider..."
+      }, { onConflict: 'id' });
+      if (error) throw error;
       setSubmitSuccess(true);
       setTimeout(() => setSubmitSuccess(false), 3000);
     } catch (err) { setError("Error al enviar trabajo."); }
     finally { setSubmitting(false); }
   };
 
-  // 4. Fetch CRM Leads
-  useEffect(() => {
-    if (!userId) return;
-    const q = query(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`), orderBy("updatedAt", "desc"));
-    const unsub = onSnapshot(q, (snapshot) => setCrmLeads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))), (err) => {
-      console.error("🔥 ERROR FIRESTORE CRM:", err);
-    });
-    return () => unsub();
-  }, [userId]);
+  // 4. Fetch CRM Leads (Migrated to Supabase in lines 155-165)
 
-  const handleAddCRM = async (place) => {
-    if(!userId) return;
-    const exists = crmLeads.find(lead => lead.name === place.name);
-    if(exists) { alert("Este prospecto ya está en tu CRM."); return; }
-    try {
-      await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`), {
-        name: place.name,
-        phone: place.phone || '',
-        website: place.website || '',
-        rank: place.rank || 0,
-        status: 'Prospecto',
-        notes: '',
-        updatedAt: serverTimestamp(),
-      });
-      alert(`¡${place.name} movido a Seguimiento!`);
-    } catch(err) {
-      console.error("Error to CRM", err);
-      alert("Error al agregar al CRM.");
-    }
-  };
 
-  const handleAddManualLead = async (e) => {
-    e.preventDefault();
-    if (!userId || !newLeadData.name.trim()) return;
-    const exists = crmLeads.find(lead => lead.name.toLowerCase() === newLeadData.name.trim().toLowerCase());
-    if (exists) { alert("Ya existe un prospecto con ese nombre en tu CRM."); return; }
-    try {
-      await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/crm_leads`), {
-        name: newLeadData.name.trim(),
-        phone: newLeadData.phone.trim() || '',
-        website: newLeadData.website.trim() || '',
-        rank: 0,
-        status: 'Prospecto',
-        notes: 'Agregado manualmente.',
-        updatedAt: serverTimestamp(),
-      });
-      setShowAddLeadModal(false);
-      setNewLeadData({ name: '', phone: '', website: '' });
-      alert(`¡${newLeadData.name.trim()} agregado al CRM!`);
-    } catch(err) {
-      console.error("Error to CRM", err);
-      alert("Error al agregar al CRM.");
-    }
-  };
-
-  const handleUpdateCRMStatus = async (leadId, newStatus) => {
-    await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { status: newStatus, updatedAt: serverTimestamp() });
-  };
-
-  const handleUpdateCRMNotes = async (leadId, newNotes) => {
-    await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { notes: newNotes, updatedAt: serverTimestamp() });
-  };
-
-  const handleUpdateCRMField = async (leadId, field, value) => {
-    await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { [field]: value, updatedAt: serverTimestamp() });
-  };
-
-  const handleToggleGap = async (leadId, gapId, currentGaps) => {
-    const gaps = currentGaps || [];
-    const newGaps = gaps.includes(gapId) ? gaps.filter(g => g !== gapId) : [...gaps, gapId];
-    await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId), { gaps: newGaps, updatedAt: serverTimestamp() });
-  };
-
-  const handleDeepScan = async (lead) => {
-    if (!lead.website || !lead.website.startsWith('http')) {
-      alert("El prospecto no tiene un sitio web válido configurado (debe empezar con http:// o https://).");
-      return;
-    }
-    setScanningGapFor(lead.id);
-    try {
-      await addDoc(collection(db, `artifacts/${APP_ID}/deep_scan_queue`), {
-        leadId: lead.id,
-        userId: userId,
-        url: lead.website,
-        status: 'pending',
-        createdAt: serverTimestamp(),
-      });
-      alert("Enviado al Deep Spider 🕸️. Los datos aparecerán pronto en esta ficha.");
-    } catch (err) {
-      console.error('Error enviando a cola deep scan:', err);
-    } finally {
-      setTimeout(() => setScanningGapFor(null), 2000); // mostrar spinner 2 seg
-    }
-  };
-
-  const handleDeleteCRMLead = async (leadId) => {
-    if (!confirm("¿Eliminar este prospecto del CRM permanentemente?")) return;
-    await deleteDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, leadId));
-  };
 
   const handleToggleJobStatus = async (jobId, currentStatus) => {
     try {
       const newStatus = (currentStatus === 'pending' || currentStatus === 'scheduled') ? 'paused' : 'pending';
-      await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/scan_jobs/`, jobId), { status: newStatus });
+      await supabase.from('global_job_queue').update({ status: newStatus }).eq('id', jobId);
     } catch (e) {
       console.error("Error al pausar/reanudar el trabajo:", e);
       alert("Error al cambiar el estado del trabajo.");
     }
   };
 
-  const handleGenerateProposal = async (lead) => {
-    if (!userId) return;
-    setGeneratingProposalFor(lead.id);
-    try {
-      const res = await fetch('/api/agent/generate-proposal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: lead.website || '', name: lead.name, status: lead.status })
-      });
-      const data = await res.json();
-      
-      if (!res.ok) {
-        alert(data.error || "Error al conectar con la IA.");
-        return;
-      }
-      
-      await updateDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/crm_leads/`, lead.id), {
-        ai_proposal_draft: data.proposal,
-        updatedAt: serverTimestamp()
-      });
-    } catch (err) {
-      console.error(err);
-      alert("Error crítico generando la propuesta.");
-    } finally {
-      setGeneratingProposalFor(null);
-    }
-  };
 
   // 5. Fetch User Config (Categories & Locations)
   useEffect(() => {
     if (!userId) return;
-    const unsub = onSnapshot(doc(db, `artifacts/${APP_ID}/users/${userId}/config`, "preferences"), (docSnap) => {
-      if (docSnap.exists()) {
-        const defaults = ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería / Barbería', 'Gimnasio', 'Bienes Raíces', 'Hostal Residencial', 'Hotel'];
-        const data = docSnap.data();
-        setUserConfig({
-           categories: data.categories ? Array.from(new Set([...defaults, ...data.categories])) : defaults,
-           locations: data.locations || ['Valparaíso', 'Viña del Mar', 'Santiago']
-        });
-      } else {
-        const defaults = ['Cafetería', 'Restaurante', 'Bar / Pub', 'Peluquería / Barbería', 'Gimnasio', 'Bienes Raíces', 'Hostal Residencial', 'Hotel'];
-        setDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/config`, "preferences"), {
-           categories: defaults,
-           locations: ['Valparaíso', 'Viña del Mar', 'Santiago']
-        }, { merge: true }).catch(console.error);
-      }
-    });
-    return () => unsub();
+    // Configura fetched eliminated for now
   }, [userId]);
 
   const handleAddCategory = async () => {
@@ -507,7 +299,6 @@ export default function MarketSpiderDashboard() {
     if(userConfig.categories.includes(clean)) return;
     const updated = [...userConfig.categories, clean];
     setUserConfig({...userConfig, categories: updated});
-    await setDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/config`, "preferences"), { categories: updated }, { merge: true });
     setFormConfig(p => ({...p, rubro: clean})); // autoselect
   };
 
@@ -518,14 +309,12 @@ export default function MarketSpiderDashboard() {
     if(userConfig.locations.includes(clean)) return;
     const updated = [...userConfig.locations, clean];
     setUserConfig({...userConfig, locations: updated});
-    await setDoc(doc(db, `artifacts/${APP_ID}/users/${userId}/config`, "preferences"), { locations: updated }, { merge: true });
     setFormConfig(p => ({...p, ciudad: clean})); // autoselect
   };
 
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', color: 'emerald' },
     { id: 'opportunities', label: 'Locales', color: 'indigo' },
-    { id: 'crm', label: 'Seguimiento', color: 'amber' },
     { id: 'config', label: 'Configuración', color: 'slate' },
   ];
 
@@ -559,10 +348,27 @@ export default function MarketSpiderDashboard() {
             <p className="text-slate-400 text-sm flex items-center gap-2">Google Maps Directory & Ranking suite</p>
             <Link href="/directorio" className="text-xs bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 font-bold px-3 py-1.5 rounded-full border border-emerald-500/30 transition-colors shadow-sm shadow-emerald-500/10 flex items-center gap-2">🗃️ Ver Directorio Consolidado</Link>
             <Link href="/global" className="text-xs bg-fuchsia-500/10 hover:bg-fuchsia-500/20 text-fuchsia-400 font-bold px-3 py-1.5 rounded-full border border-fuchsia-500/30 transition-colors shadow-sm shadow-fuchsia-500/10 flex items-center gap-2">🌐 Rastreador GLOBAL 24/7</Link>
-            <Link href="/cotizador" className="text-xs bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 font-bold px-3 py-1.5 rounded-full border border-indigo-500/30 transition-colors shadow-sm shadow-indigo-500/10 flex items-center gap-2"><FileText size={14}/> CotizaPro Generator</Link>
           </div>
         </div>
-        <nav className="mt-4 md:mt-0 flex flex-wrap gap-2">
+        <nav className="mt-4 md:mt-0 flex flex-wrap gap-2 items-center">
+          {/* Selector de Origen de Datos Global */}
+          <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded-lg p-1 mr-4 shadow-inner">
+            <button
+              type="button"
+              onClick={() => { setSelectedSource('gmaps'); setSelectedBusiness(null); }}
+              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${selectedSource === 'gmaps' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              📍 GMaps
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSelectedSource('amarillas'); setSelectedBusiness(null); }}
+              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${selectedSource === 'amarillas' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              💛 Amarillas
+            </button>
+          </div>
+
           {tabs.map(tab => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id)}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id
@@ -604,12 +410,30 @@ export default function MarketSpiderDashboard() {
         {/* ======================== TAB: DASHBOARD ======================== */}
         {activeTab === 'dashboard' && (
           <div className="animate-in fade-in duration-500 space-y-6">
-            <div className="flex items-center gap-3 mb-4">
-              <Activity className="text-emerald-400" size={28} />
-              <h2 className="text-2xl font-bold text-white">Resumen Global</h2>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <Activity className="text-emerald-400" size={28} />
+                <h2 className="text-2xl font-bold text-white">Resumen Global</h2>
+              </div>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => handleToggleScrapers('start')}
+                  disabled={toggleScraperLoading}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 disabled:opacity-50 transition-colors"
+                >
+                  <Play size={16} /> Arrancar
+                </button>
+                <button 
+                  onClick={() => handleToggleScrapers('stop')}
+                  disabled={toggleScraperLoading}
+                  className="bg-rose-600 hover:bg-rose-500 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 disabled:opacity-50 transition-colors"
+                >
+                  <Square size={16} /> Detener
+                </button>
+              </div>
             </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-4 opacity-10 text-emerald-500 group-hover:scale-110 transition-transform"><Globe size={64}/></div>
                 <p className="text-slate-400 font-semibold mb-1 relative z-10 text-sm uppercase tracking-wider">Total Extraídos</p>
@@ -620,18 +444,6 @@ export default function MarketSpiderDashboard() {
                 <p className="text-slate-400 font-semibold mb-1 relative z-10 text-sm uppercase tracking-wider">Pendientes Revisión</p>
                 <h3 className="text-4xl font-black text-indigo-400 relative z-10">
                   {totalPending}
-                </h3>
-              </div>
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 relative overflow-hidden group">
-                <div className="absolute top-0 right-0 p-4 opacity-10 text-amber-500 group-hover:scale-110 transition-transform"><Target size={64}/></div>
-                <p className="text-slate-400 font-semibold mb-1 relative z-10 text-sm uppercase tracking-wider">En Embudo CRM</p>
-                <h3 className="text-4xl font-black text-amber-400 relative z-10">{crmLeads.length}</h3>
-              </div>
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 relative overflow-hidden group">
-                <div className="absolute top-0 right-0 p-4 opacity-10 text-emerald-500 group-hover:scale-110 transition-transform"><CheckSquare size={64}/></div>
-                <p className="text-slate-400 font-semibold mb-1 relative z-10 text-sm uppercase tracking-wider">Ventas Ganadas</p>
-                <h3 className="text-4xl font-black text-emerald-400 relative z-10">
-                  {crmLeads.filter(l => l.status === 'Ganado').length}
                 </h3>
               </div>
             </div>
@@ -649,6 +461,8 @@ export default function MarketSpiderDashboard() {
                 Comenzar Triage
               </button>
             </div>
+            
+            <LogsTerminal />
           </div>
         )}
 
@@ -713,47 +527,56 @@ export default function MarketSpiderDashboard() {
                   <div className="mt-7">
                     <h3 className="font-bold text-lg text-white mb-2 pr-2">{place.name}</h3>
                     <div className="flex items-center text-xs text-slate-400 gap-3 mb-4 flex-wrap">
-                      <span className="flex items-center gap-1"><Star size={12} className="text-amber-400" /> {place.rating} ({place.reviews})</span>
-                      <span className="flex items-center gap-1 font-bold text-indigo-400">Rank #{place.rank}</span>
-                      {place.hasVideo === false && <span className="flex items-center gap-1 text-rose-300"><Video size={12}/> Sin Video</span>}
-                      {place.claimed === false && <span className="flex items-center gap-1 text-orange-300"><AlertCircle size={12}/> Ficha Abandonada</span>}
+                      {selectedSource === 'gmaps' ? (
+                        <>
+                          <span className="flex items-center gap-1"><Star size={12} className="text-amber-400" /> {place.rating} ({place.reviews})</span>
+                          <span className="flex items-center gap-1 font-bold text-indigo-400">Rank #{place.rank}</span>
+                          {place.hasVideo === false && <span className="flex items-center gap-1 text-rose-300"><Video size={12}/> Sin Video</span>}
+                          {place.claimed === false && <span className="flex items-center gap-1 text-orange-300"><AlertCircle size={12}/> Ficha Abandonada</span>}
+                        </>
+                      ) : (
+                        <>
+                          <span className="bg-amber-500/10 text-amber-300 px-2 py-0.5 rounded text-[10px] uppercase font-bold border border-amber-500/20">{place.rubro}</span>
+                          <span className="bg-indigo-500/10 text-indigo-300 px-2 py-0.5 rounded text-[10px] uppercase font-bold border border-indigo-500/20">{place.country?.toUpperCase()}</span>
+                          {(!place.whatsapp || place.whatsapp.length === 0) && <span className="flex items-center gap-1 text-rose-300">💬 Sin WhatsApp</span>}
+                        </>
+                      )}
                     </div>
 
                     <div className="space-y-3 mb-5 bg-slate-950 p-4 rounded-xl border border-white/5 text-sm">
                       <div className="flex items-center gap-3">
                         <Phone size={14} className="text-slate-500 shrink-0" />
-                        {place.phone ? <a href={`tel:${place.phone.replace(/\s/g, '')}`} className="text-indigo-400 hover:underline truncate">{place.phone}</a> : <span className="text-slate-600">No listado</span>}
+                        {selectedSource === 'gmaps' ? (
+                          place.phone ? <a href={`tel:${place.phone.replace(/\s/g, '')}`} className="text-indigo-400 hover:underline truncate">{place.phone}</a> : <span className="text-slate-600">No listado</span>
+                        ) : (
+                          place.phones && place.phones.length > 0 ? <a href={`tel:${place.phones[0].replace(/\s/g, '')}`} className="text-indigo-400 hover:underline truncate">{place.phones[0]}</a> : <span className="text-slate-600">No listado</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-3">
                         <Globe size={14} className="text-slate-500 shrink-0" />
-                        {(place.website || place.url) ? <a href={place.website || place.url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline truncate">Visitar Web</a> : <span className="text-slate-600">No listada</span>}
+                        {selectedSource === 'gmaps' ? (
+                          (place.website || place.url) ? <a href={place.website || place.url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline truncate">Visitar Web</a> : <span className="text-slate-600">No listada</span>
+                        ) : (
+                          place.websites && place.websites.length > 0 ? <a href={place.websites[0]} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline truncate">{place.websites[0].replace(/^https?:\/\/(www\.)?/, '')}</a> : <span className="text-slate-600">No listada</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-3">
                         <MapIcon size={14} className="text-slate-500 shrink-0" />
-                        <a href={place.gmapsLink || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name + ' ' + (place.location || ''))}`}
-                          target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline truncate">
-                          Ver en Google Maps
-                        </a>
+                        {selectedSource === 'gmaps' ? (
+                          <a href={place.gmapsLink || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name + ' ' + (place.location || ''))}`}
+                            target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline truncate">
+                            Ver en Google Maps
+                          </a>
+                        ) : (
+                          <a href={place.ficha_url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline truncate">
+                            Ver Ficha Original
+                          </a>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Botonera de Triaje Rápido */}
-                  <div className="pt-3 border-t border-slate-800 space-y-2">
-                    <div className="grid grid-cols-2 gap-2">
-                      <button onClick={() => handleSetStatus(place, 'discarded')}
-                        className={`text-xs py-2 px-2 rounded-lg border transition-all font-bold bg-slate-800 text-slate-400 border-slate-700 hover:border-rose-500/40 hover:text-rose-400 hover:bg-rose-500/10`}>
-                        ❌ Descartar
-                      </button>
-                      <button onClick={() => handleSetStatus(place, 'crm')}
-                        className={`text-xs py-2 px-2 rounded-lg border transition-all font-bold bg-emerald-600/20 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500 hover:text-white`}>
-                        ✅ Pasar al CRM
-                      </button>
-                    </div>
-                    <button onClick={() => handleCopyPitch(place)} className="w-full flex items-center justify-center gap-2 text-xs bg-white/5 hover:bg-white/10 text-slate-300 py-1.5 px-3 rounded-lg transition-colors border border-white/10">
-                      <Copy size={13} /> Copiar Pitch de Venta
-                    </button>
-                  </div>
+
                 </div>);
               })}
             </div>
@@ -775,247 +598,7 @@ export default function MarketSpiderDashboard() {
           </div>);
         })()}
 
-        {/* ======================== TAB: CRM ======================== */}
-        {activeTab === 'crm' && (
-          <div className="animate-in fade-in duration-500">
-            <div className="flex flex-wrap items-center gap-3 mb-6">
-              <h2 className="text-2xl font-bold flex items-center gap-2">
-                <Target className="text-amber-400" /> CRM / Seguimiento
-                <span className="ml-2 bg-slate-800 text-slate-300 px-3 py-1 rounded-full text-xs border border-slate-700">
-                  {crmLeads.length} Prospectos
-                </span>
-              </h2>
-              <div className="ml-auto flex flex-wrap items-center gap-4">
-                <button
-                  onClick={() => setShowAddLeadModal(true)}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-emerald-600/20"
-                >
-                  <PlusCircle size={14} /> Añadir Manual
-                </button>
-                {crmSearch && (
-                  <span className="text-xs text-indigo-400 font-bold animate-pulse">
-                    {crmLeads.filter(l => l.name?.toLowerCase().includes(crmSearch.toLowerCase())).length} resultados
-                  </span>
-                )}
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={15} />
-                  <input
-                    type="text"
-                    placeholder="Buscar prospecto..."
-                    value={crmSearch}
-                    onChange={e => setCrmSearch(e.target.value)}
-                    className="bg-slate-900 border border-slate-700 text-white pl-9 pr-4 py-2 rounded-xl text-sm focus:border-indigo-500 focus:outline-none transition-colors w-56 shadow-inner shadow-black/20"
-                  />
-                </div>
-              </div>
-            </div>
-            
-            <div className="flex gap-6 overflow-x-auto pb-8 snap-x">
-              {CRM_STATUSES.map(col => {
-                const colLeads = crmLeads.filter(l => {
-                  const matchesCol = l.status === col.id;
-                  const matchesSearch = !crmSearch || l.name?.toLowerCase().includes(crmSearch.toLowerCase());
-                  return matchesCol && matchesSearch;
-                });
-                const ColIcon = col.icon;
-                return (
-                  <div key={col.id} className="min-w-[300px] w-[300px] flex-shrink-0 snap-start">
-                    <div className={`bg-${col.color}-500/10 border border-${col.color}-500/30 rounded-t-xl p-3 flex justify-between items-center ${col.id === 'Ganado' ? 'ring-2 ring-emerald-500/50 relative overflow-hidden' : ''}`}>
-                      {col.id === 'Ganado' && <div className="absolute top-0 right-0 p-1 bg-emerald-500 text-[8px] font-extrabold text-white rotate-45 transform translate-x-3 -translate-y-3 px-4 uppercase tracking-tighter">Éxito</div>}
-                      <h3 className={`font-bold text-${col.color}-400 flex items-center gap-2`}><ColIcon size={16}/> {col.id}</h3>
-                      <span className="bg-slate-900 px-2 py-0.5 rounded text-xs text-slate-300">{colLeads.length}</span>
-                    </div>
-                    <div className={`bg-slate-900 border border-slate-800 border-t-0 rounded-b-xl min-h-[500px] p-3 space-y-3 ${col.id === 'Ganado' ? 'bg-emerald-500/5 border-emerald-500/20' : ''}`}>
-                      {colLeads.length === 0 && (
-                        <div className="h-40 flex flex-col items-center justify-center text-slate-700 border border-dashed border-slate-800 rounded-lg">
-                           <ColIcon size={24} className="opacity-20 mb-2" />
-                           <p className="text-[10px] uppercase font-bold tracking-widest">Vacío</p>
-                        </div>
-                      )}
-                      {colLeads.map(lead => (
-                        <div key={lead.id} className="bg-slate-800 border border-slate-700 rounded-lg p-4 shadow-lg flex flex-col gap-3">
-                          <div>
-                            <div className="flex justify-between items-start mb-1">
-                              <Link href={`/crm/${lead.id}`} className="font-bold text-white text-sm leading-tight pr-4 hover:text-indigo-400 transition-colors flex-1">
-                                {lead.name}
-                              </Link>
-                              <button onClick={() => handleDeleteCRMLead(lead.id)} className="text-slate-600 hover:text-rose-400 transition-colors" title="Borrar Prospecto"><Trash2 size={14}/></button>
-                            </div>
-                            <div className="flex items-center text-[10px] text-slate-400 gap-2 mb-2">
-                              <span>Rank #{lead.rank}</span>
-                              {lead.updatedAt && (
-                                <span className="opacity-60 flex items-center gap-1">
-                                  · <Calendar size={8} /> {new Date(lead.updatedAt?.seconds * 1000).toLocaleDateString()}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          
-                          <div className="flex flex-col gap-1.5 text-xs text-slate-300">
-                            {lead.phone && <a href={`tel:${lead.phone.replace(/\s/g,'')}`} className="flex items-center gap-2 hover:text-indigo-400"><Phone size={12}/> {lead.phone}</a>}
-                            {lead.website && <a href={lead.website} target="_blank" className="flex items-center gap-2 hover:text-indigo-400"><Globe size={12}/> Sitio Web</a>}
-                            <a href={lead.gmapsLink || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lead.name)}`}
-                              target="_blank" rel="noreferrer" className="flex items-center gap-2 hover:text-blue-400 text-blue-500">
-                              <MapPin size={12}/> Ver en Google Maps
-                            </a>
-                          </div>
 
-                          {/* --- GAPS DE OPORTUNIDAD --- */}
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span> Datos / Brechas
-                              </p>
-                              <button
-                                onClick={() => handleDeepScan(lead)}
-                                disabled={scanningGapFor === lead.id}
-                                className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-md border bg-indigo-900/50 border-indigo-700 text-indigo-300 hover:border-indigo-500 hover:bg-indigo-600/20 hover:text-indigo-200 transition-all disabled:opacity-50 shadow-sm"
-                                title="Extraer Emails y RRSS automáticamente del sitio web"
-                              >
-                                {scanningGapFor === lead.id
-                                  ? <><Loader2 size={10} className="animate-spin" /> Escaneando...</>
-                                  : <><RefreshCw size={10} /> Deep Spider (Web)</>
-                                }
-                              </button>
-                            </div>
-                            
-                            {/* Deep Spider Results */}
-                            {lead.deepScrape && (
-                              <div className="bg-slate-950 p-2 rounded-lg border border-indigo-500/30 text-xs mb-2 space-y-1 text-slate-300">
-                                <p className="text-[10px] font-bold text-indigo-400 mb-1">Resultados Deep Spider:</p>
-                                {lead.deepScrape.emails?.length > 0 && (
-                                  <p className="truncate"><strong className="text-white">✉️ Emails:</strong> {lead.deepScrape.emails.join(', ')}</p>
-                                )}
-                                {lead.deepScrape.socials?.length > 0 && (
-                                  <p className="truncate"><strong className="text-white">📱 RRSS:</strong> {lead.deepScrape.socials.join(', ')}</p>
-                                )}
-                                {lead.deepScrape.video_count !== undefined && (
-                                  <p><strong className="text-white">🎥 Videos en web:</strong> {lead.deepScrape.video_count}</p>
-                                )}
-                              </div>
-                            )}
-
-                            <div className="flex flex-wrap gap-1.5">
-                              {OPPORTUNITY_GAPS.map(gap => {
-                                const active = (lead.gaps || []).includes(gap.id);
-                                return (
-                                  <button
-                                    key={gap.id}
-                                    onClick={() => handleToggleGap(lead.id, gap.id, lead.gaps)}
-                                    title={gap.label}
-                                    className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full border transition-all ${
-                                      active
-                                        ? gap.color + ' shadow-sm'
-                                        : 'bg-slate-900 text-slate-600 border-slate-700 hover:border-slate-500 hover:text-slate-400'
-                                    }`}
-                                  >
-                                    <span>{gap.emoji}</span>
-                                    {active && <span className="max-w-[80px] truncate">{gap.label}</span>}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-
-                          {/* --- DATOS DEL CAMPO (manuales) --- */}
-                          <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3 space-y-2">
-                            <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-2 flex items-center gap-1.5">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Datos del Campo
-                            </p>
-                            <div className="grid grid-cols-1 gap-2">
-                              <div className="flex items-center gap-2">
-                                <span className="text-pink-400 shrink-0 text-sm">@</span>
-                                <input
-                                  type="text"
-                                  placeholder="Instagram (@handle)"
-                                  defaultValue={lead.instagram || ''}
-                                  onBlur={(e) => handleUpdateCRMField(lead.id, 'instagram', e.target.value)}
-                                  className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 placeholder-slate-600 focus:border-pink-500/50 focus:outline-none transition-colors"
-                                />
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-sky-400 shrink-0 text-xs">✉</span>
-                                <input
-                                  type="email"
-                                  placeholder="Email de contacto"
-                                  defaultValue={lead.email || ''}
-                                  onBlur={(e) => handleUpdateCRMField(lead.id, 'email', e.target.value)}
-                                  className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 placeholder-slate-600 focus:border-sky-500/50 focus:outline-none transition-colors"
-                                />
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-slate-400 shrink-0 text-xs">👤</span>
-                                <input
-                                  type="text"
-                                  placeholder="Nombre del encargado"
-                                  defaultValue={lead.contact_name || ''}
-                                  onBlur={(e) => handleUpdateCRMField(lead.id, 'contact_name', e.target.value)}
-                                  className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 placeholder-slate-600 focus:border-slate-500/50 focus:outline-none transition-colors"
-                                />
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-violet-400 shrink-0 text-xs">🔵</span>
-                                <input
-                                  type="text"
-                                  placeholder="Facebook / otra red"
-                                  defaultValue={lead.facebook || ''}
-                                  onBlur={(e) => handleUpdateCRMField(lead.id, 'facebook', e.target.value)}
-                                  className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 placeholder-slate-600 focus:border-violet-500/50 focus:outline-none transition-colors"
-                                />
-                              </div>
-                            </div>
-                          </div>
-
-                          <textarea 
-                            className="bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs text-slate-300 w-full h-20 resize-none focus:border-indigo-500 transition-colors"
-                            placeholder="Notas de la llamada o correos..."
-                            defaultValue={lead.notes}
-                            onBlur={(e) => handleUpdateCRMNotes(lead.id, e.target.value)}
-                          />
-
-                          <div className="pt-3 border-t border-slate-700/50 flex flex-col gap-3">
-                            <select 
-                              className="bg-slate-900 border border-slate-700 text-slate-300 rounded-lg px-2 py-2 text-xs w-full focus:border-amber-500 outline-none"
-                              value={lead.status}
-                              onChange={(e) => handleUpdateCRMStatus(lead.id, e.target.value)}
-                            >
-                              {CRM_STATUSES.map(s => <option key={s.id} value={s.id}>Mover a: {s.id}</option>)}
-                            </select>
-
-                            {!lead.ai_proposal_draft ? (
-                              <button 
-                                onClick={() => handleGenerateProposal(lead)}
-                                disabled={generatingProposalFor === lead.id}
-                                className="w-full bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-lg px-3 py-2 text-xs font-bold transition-all flex items-center justify-center gap-2"
-                              >
-                                {generatingProposalFor === lead.id ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                                {generatingProposalFor === lead.id ? "Analizando Funnel..." : "Generar Propuesta IA"}
-                              </button>
-                            ) : (
-                               <div className="flex flex-col gap-2 mt-2">
-                                <span className="text-[10px] uppercase font-bold text-indigo-400 flex items-center gap-1"><Sparkles size={12}/> Propuesta Generada</span>
-                                <textarea
-                                  className="w-full bg-slate-950 border border-indigo-500/30 rounded-lg p-3 text-xs text-slate-300 min-h-[150px] resize-y focus:border-indigo-500 transition-colors"
-                                  defaultValue={`Hola Equipo de ${lead.name},\n\n${lead.ai_proposal_draft.gancho_inicial}\n\n${lead.ai_proposal_draft.analisis_competencia_maps}\n\n${lead.ai_proposal_draft.propuesta_audiovisual}\n\n${lead.ai_proposal_draft.cta_personalizado}`}
-                                />
-                                <button onClick={() => {
-                                   navigator.clipboard.writeText(`Hola Equipo de ${lead.name},\n\n${lead.ai_proposal_draft.gancho_inicial}\n\n${lead.ai_proposal_draft.analisis_competencia_maps}\n\n${lead.ai_proposal_draft.propuesta_audiovisual}\n\n${lead.ai_proposal_draft.cta_personalizado}`);
-                                   alert("¡Propuesta copiada!");
-                                }} className="w-full bg-slate-800 hover:bg-slate-700 text-white border border-slate-600 rounded-lg px-3 py-1.5 text-xs transition-colors flex items-center justify-center gap-2">
-                                  <Copy size={12}/> Copiar al Portapapeles
-                                </button>
-                               </div>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         {/* ======================== TAB: CONFIGURACION ======================== */}
         {activeTab === 'config' && (
@@ -1236,70 +819,7 @@ export default function MarketSpiderDashboard() {
 
       </main>
 
-      {/* MODAL: Agregar Lead Manual */}
-      {showAddLeadModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl p-6 relative">
-            <button
-              onClick={() => setShowAddLeadModal(false)}
-              className="absolute top-4 right-4 text-slate-500 hover:text-white"
-            >
-              <XCircle size={24} />
-            </button>
-            <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-              <PlusCircle className="text-emerald-400" /> Nuevo Prospecto Manual
-            </h3>
-            <form onSubmit={handleAddManualLead} className="space-y-4">
-              <div>
-                <label className="block text-sm text-slate-400 mb-1">Nombre del Negocio *</label>
-                <input
-                  type="text"
-                  required
-                  value={newLeadData.name}
-                  onChange={e => setNewLeadData({ ...newLeadData, name: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:border-emerald-500 outline-none"
-                  placeholder="Ej. Pizzería Roma"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-slate-400 mb-1">Teléfono</label>
-                <input
-                  type="text"
-                  value={newLeadData.phone}
-                  onChange={e => setNewLeadData({ ...newLeadData, phone: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:border-emerald-500 outline-none"
-                  placeholder="Ej. +56912345678"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-slate-400 mb-1">Sitio Web / Link</label>
-                <input
-                  type="url"
-                  value={newLeadData.website}
-                  onChange={e => setNewLeadData({ ...newLeadData, website: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:border-emerald-500 outline-none"
-                  placeholder="Ej. https://mi-web.com"
-                />
-              </div>
-              <div className="pt-4 flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowAddLeadModal(false)}
-                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-white py-2 rounded-xl transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-xl transition-colors shadow-lg shadow-emerald-600/20"
-                >
-                  Guardar en CRM
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 }
