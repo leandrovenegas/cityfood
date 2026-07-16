@@ -1,3 +1,5 @@
+Reglas globales: ver proyectos/_global/AGENTS.md — aplican siempre junto a las reglas específicas de este proyecto.
+
 <!-- BEGIN:nextjs-agent-rules -->
 # This is NOT the Next.js you know
 

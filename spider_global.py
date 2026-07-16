@@ -5,8 +5,6 @@ print("INICIANDO SPIDER GLOBAL...")
 import asyncio
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
-import firebase_admin
-from firebase_admin import credentials, firestore
 import datetime
 import urllib.parse
 import urllib.request
@@ -14,18 +12,20 @@ import re
 
 import os
 from dotenv import load_dotenv
+from supabase import create_client, Client
 
 load_dotenv()
 
-# Firebase Setup
-try:
-    key_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "serviceAccountKey.json")
-    cred = credentials.Certificate(key_path)
-    firebase_admin.initialize_app(cred)
-except ValueError:
-    pass
+supabase_url = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+supabase_key = os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
-db = firestore.client()
+supabase: Client = None
+if supabase_url and supabase_key:
+    supabase = create_client(supabase_url, supabase_key)
+    print("[SUPABASE] Conectado exitosamente.", flush=True)
+else:
+    print("[SUPABASE] Credenciales no encontradas.", flush=True)
+    sys.exit(1)
 
 MASTER_CATEGORIES = [
     "restaurante", "cafeteria", "pasteleria", "bar", "sushi", "pizzeria", "comida rapida",
@@ -37,17 +37,22 @@ MASTER_CATEGORIES = [
 ]
 
 def fetch_and_lock():
-    queue_ref = db.collection(f"artifacts/marketspider-v3/global_job_queue")
-    docs = queue_ref.where("status", "==", "pending").limit(1).get() 
-    for doc in docs:
-        snapshot = doc.to_dict()
-        if snapshot.get("attempts", 0) < 3:
-            doc.reference.update({
-                "status": "processing",
-                "last_run": datetime.datetime.now(datetime.timezone.utc),
-                "attempts": snapshot.get("attempts", 0) + 1
-            })
-            return {"id": doc.id, **snapshot}
+    try:
+        response = supabase.table("global_job_queue").select("*").eq("status", "pending").limit(1).execute()
+        if response.data and len(response.data) > 0:
+            snapshot = response.data[0]
+            attempts = snapshot.get("attempts") or 0
+            
+            if attempts < 3:
+                now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                supabase.table("global_job_queue").update({
+                    "status": "processing",
+                    "last_run": now,
+                    "attempts": attempts + 1
+                }).eq("id", snapshot["id"]).execute()
+                return snapshot
+    except Exception as e:
+        print(f"Error en fetch_and_lock: {e}")
     return None
 
 async def get_next_job():
@@ -70,67 +75,28 @@ def extract_place_id_from_url(url: str) -> str:
     return "UNKNOWN_" + str(hash(url))
 
 def upsert_business(place_data: dict, place_id: str):
-    """Guarda en coleccion de negocios y genera History Snapshot si es necesario"""
-    businesses_ref = db.collection(f"artifacts/marketspider-v3/global_businesses").document(place_id)
-    doc = businesses_ref.get()
+    """Guarda en coleccion de negocios"""
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    place_data["id"] = place_id
+    place_data["last_seen"] = now
     
-    now = datetime.datetime.now(datetime.timezone.utc)
-    
-    if doc.exists:
-        old_data = doc.to_dict()
-        
-        # Preservar el estado existente (ej. "crm", "discarded") y fecha de creación
-        place_data["status"] = old_data.get("status", "pending")
-        if "created_at" in old_data:
-            place_data["created_at"] = old_data["created_at"]
+    try:
+        response = supabase.table("global_businesses").select("status, created_at").eq("id", place_id).execute()
+        if response.data and len(response.data) > 0:
+            old_data = response.data[0]
+            place_data["status"] = old_data.get("status", "pending")
+            place_data["created_at"] = old_data.get("created_at")
             
-        old_reviews = old_data.get("reviews", 0)
-        new_reviews = place_data.get("reviews", 0)
-        old_rating = old_data.get("rating", 0.0)
-        new_rating = place_data.get("rating", 0.0)
-        
-        rating_changed = old_rating != new_rating
-        reviews_changed = old_reviews != new_reviews
-        
-        if rating_changed or reviews_changed:
-            # Enviar Snapshot
-            history_ref = businesses_ref.collection("history").document(now.isoformat())
-            history_ref.set({
-                "date": now,
-                "rating": new_rating,
-                "reviews": new_reviews,
-                "visualScore": place_data.get("visualScore", 0)
-            })
-            
-        # Detectar si hay cambios reales en otros campos para actualizar el documento maestro
-        has_updates = False
-        update_payload = {}
-        for key, val in place_data.items():
-            if key == "last_seen":
-                continue
-            if old_data.get(key) != val:
-                has_updates = True
-                update_payload[key] = val
-                
-        if has_updates:
-            update_payload["last_seen"] = now
-            businesses_ref.update(update_payload)
-            print(f"      \033[93m⚡ [UPDATE]\033[0m {place_data['name'][:30]} (Cambios detectados: {', '.join(update_payload.keys())})")
+            # Upsert actualiza el registro existente
+            supabase.table("global_businesses").upsert(place_data, on_conflict="id").execute()
+            print(f"      \033[93m⚡ [UPDATE]\033[0m {place_data['name'][:30]}")
         else:
-            print(f"      \033[90m〰️ [SKIP]\033[0m {place_data['name'][:30]} (Sin cambios recientes)")
-    else:
-        # Nuevo negocio
-        place_data["created_at"] = now
-        businesses_ref.set(place_data)
-        
-        history_ref = businesses_ref.collection("history").document(now.isoformat())
-        history_ref.set({
-            "date": now,
-            "rating": place_data.get("rating"),
-            "reviews": place_data.get("reviews"),
-            "visualScore": place_data.get("visualScore", 0)
-        })
-        print(f"      \033[92m🟢 [NUEVO]\033[0m {place_data['name'][:30]} indexado por 1ra vez.")
+            # Nuevo negocio
+            place_data["created_at"] = now
+            supabase.table("global_businesses").upsert(place_data, on_conflict="id").execute()
+            print(f"      \033[92m🟢 [NUEVO]\033[0m {place_data['name'][:30]} indexado por 1ra vez.")
+    except Exception as e:
+        print(f"Error upsert_business: {e}")
 
 def sync_upsert_business(place_data, place_id):
     upsert_business(place_data, place_id)
@@ -194,7 +160,6 @@ async def extract_feed_data(page, lat, lng, worker_id):
     # Process each roughly
     processed_count = 0
     for href, text_block in unique_businesses.items():
-        # processed_count >= 15: break # Eliminamos el limite para extraer absolutamente todo en cada celda H3
         
         place_id = extract_place_id_from_url(href)
         m = re.search(r'/place/([^/]+)/', href)
@@ -281,8 +246,6 @@ async def extract_feed_data(page, lat, lng, worker_id):
         # Calcular Need Score Base
         need_score = 0
         if rating > 0 and rating < 4.0: need_score += 25
-        # we will add +30 (no video) +20 (no web) +15 (no reclamada) later if we can detect it, 
-        # but for now we give them by default to be refined by deep spider
         need_score += 30 # default no video assumption
         need_score += 20 # default no web assumption
         need_score += 15 # default no reclamada assumption
@@ -300,14 +263,12 @@ async def extract_feed_data(page, lat, lng, worker_id):
             "hours": hours,
             "address": address,
             "status": "pending",
-            "needScore": need_score,
-            "last_seen": datetime.datetime.now(datetime.timezone.utc)
+            "needScore": need_score
         }, place_id)
         processed_count += 1
 
 async def worker(worker_id):
     async with async_playwright() as p:
-        import os
         exec_path = '/usr/bin/chromium-browser' if os.path.exists('/usr/bin/chromium-browser') else None
         browser = await p.chromium.launch(headless=True, executable_path=exec_path)
         context = await browser.new_context(
@@ -335,18 +296,14 @@ async def worker(worker_id):
                 
                 # Marcar completado
                 def mark_completed():
-                    db.collection(f"artifacts/marketspider-v3/global_job_queue").document(cell_id).update({
-                        "status": "completed"
-                    })
+                    supabase.table("global_job_queue").update({"status": "completed"}).eq("id", cell_id).execute()
                 await asyncio.to_thread(mark_completed)
                 print(f"[{now_ts}] [W-{worker_id}] OK - Celda validada y completada. Moviendo a la siguiente...")
                 
             except Exception as e:
                 print(f"[{now_ts}] [W-{worker_id}] ERROR: {e}")
                 def mark_failed():
-                    db.collection(f"artifacts/marketspider-v3/global_job_queue").document(cell_id).update({
-                        "status": "failed"
-                    })
+                    supabase.table("global_job_queue").update({"status": "failed"}).eq("id", cell_id).execute()
                 await asyncio.to_thread(mark_failed)
                 
         await browser.close()

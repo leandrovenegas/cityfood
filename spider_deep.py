@@ -4,65 +4,76 @@ import asyncio
 import re
 import datetime
 from playwright.async_api import async_playwright
-import firebase_admin
-from firebase_admin import credentials, firestore
 
 import os
 from dotenv import load_dotenv
+from supabase import create_client, Client
 
 load_dotenv()
 
-# Firebase Setup
-try:
-    key_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "serviceAccountKey.json")
-    cred = credentials.Certificate(key_path)
-    firebase_admin.initialize_app(cred)
-except ValueError:
-    pass
+supabase_url = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+supabase_key = os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
-db = firestore.client()
+supabase: Client = None
+if supabase_url and supabase_key:
+    supabase = create_client(supabase_url, supabase_key)
+    print("[SUPABASE] Conectado exitosamente.", flush=True)
+else:
+    print("[SUPABASE] Credenciales no encontradas.", flush=True)
+    sys.exit(1)
 
 def fetch_and_lock_deep_job():
-    queue_ref = db.collection("artifacts/marketspider-v3/deep_scan_queue")
-    docs = queue_ref.where("status", "==", "pending").limit(1).get() 
-    for doc in docs:
-        snapshot = doc.to_dict()
-        if snapshot.get("attempts", 0) < 3:
-            doc.reference.update({
-                "status": "processing",
-                "last_run": datetime.datetime.now(datetime.timezone.utc),
-                "attempts": snapshot.get("attempts", 0) + 1
-            })
-            return {"id": doc.id, **snapshot}
-        else:
-            doc.reference.update({"status": "failed"})
+    try:
+        response = supabase.table("deep_scan_queue").select("*").eq("status", "pending").limit(1).execute()
+        
+        if response.data and len(response.data) > 0:
+            snapshot = response.data[0]
+            attempts = snapshot.get("attempts") or 0
+            
+            if attempts < 3:
+                now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                supabase.table("deep_scan_queue").update({
+                    "status": "processing",
+                    "last_run": now,
+                    "attempts": attempts + 1
+                }).eq("id", snapshot["id"]).execute()
+                return snapshot
+            else:
+                supabase.table("deep_scan_queue").update({"status": "failed"}).eq("id", snapshot["id"]).execute()
+    except Exception as e:
+        print(f"Error en fetch_and_lock_deep_job: {e}")
     return None
 
 async def get_next_job():
     return await asyncio.to_thread(fetch_and_lock_deep_job)
 
 def update_lead(user_id, lead_id, deep_data, job_id):
-    # Actualizamos el documento del lead en el CRM
-    lead_ref = db.collection(f"artifacts/marketspider-v3/users/{user_id}/crm_leads").document(lead_id)
-    lead_ref.update({
-        "deepScrape": deep_data,
-        "updatedAt": datetime.datetime.now(datetime.timezone.utc)
-    })
-    
-    # Marcamos el job como completado
-    job_ref = db.collection("artifacts/marketspider-v3/deep_scan_queue").document(job_id)
-    job_ref.update({
-        "status": "completed",
-        "completedAt": datetime.datetime.now(datetime.timezone.utc)
-    })
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    try:
+        # Actualizamos el documento del lead en el CRM
+        supabase.table("crm_leads").update({
+            "deepScrape": deep_data,
+            "updatedAt": now
+        }).eq("id", lead_id).execute()
+        
+        # Marcamos el job como completado
+        supabase.table("deep_scan_queue").update({
+            "status": "completed",
+            "completedAt": now
+        }).eq("id", job_id).execute()
+    except Exception as e:
+        print(f"Error en update_lead: {e}")
 
 def mark_failed(job_id, error_msg):
-    job_ref = db.collection("artifacts/marketspider-v3/deep_scan_queue").document(job_id)
-    job_ref.update({
-        "status": "failed",
-        "error": error_msg,
-        "completedAt": datetime.datetime.now(datetime.timezone.utc)
-    })
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    try:
+        supabase.table("deep_scan_queue").update({
+            "status": "failed",
+            "error": error_msg,
+            "completedAt": now
+        }).eq("id", job_id).execute()
+    except Exception as e:
+        print(f"Error en mark_failed: {e}")
 
 async def process_url(page, url):
     print(f"  -> Navegando a: {url}")
@@ -130,7 +141,13 @@ async def process_url(page, url):
 
 async def worker(worker_id):
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        # Usar executable_path para usar el Chromium del sistema (en linux)
+        exec_path = '/usr/bin/chromium-browser' if os.path.exists('/usr/bin/chromium-browser') else None
+        
+        browser = await p.chromium.launch(
+            headless=True,
+            executable_path=exec_path
+        )
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 DeepSpider/1.0"
         )
